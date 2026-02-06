@@ -14,7 +14,7 @@ from ..db.database import SessionLocal
 from ..db.models import TerminalSessionDB
 
 class TerminalSession:
-    def __init__(self, session_id: str, username: str, name: str, buffer_size: int = 1000, db: Session = None):
+    def __init__(self, session_id: str, username: str, name: str, buffer_size: int = 1000):
         self.session_id = session_id
         self.username = username
         self.name = name
@@ -24,10 +24,14 @@ class TerminalSession:
         self.last_activity = time.time()
         self.buffer = []  # 内存缓存
         self.max_buffer_size = buffer_size
-        self.db = db
         self.cwd = None
         self.rows = 24  # 默认行数
         self.cols = 80  # 默认列数
+        self.connected_clients = {}  # 跟踪连接的客户端 {client_id: last_output_index}
+        self.output_history = []  # 完整的输出历史，用于新客户端连接
+        self.output_index = 0  # 当前输出索引
+        import threading
+        self.lock = threading.Lock()  # 线程锁，保护共享数据
         
     def start(self, cols: int = 80, rows: int = 24, cwd: str = None):
         """启动终端会话"""
@@ -144,10 +148,23 @@ class TerminalSession:
                 output = data.decode('utf-8', errors='ignore')
                 self.last_activity = time.time()
                 
-                # 缓存输出
-                self.buffer.append(output)
-                if len(self.buffer) > self.max_buffer_size:
-                    self.buffer.pop(0)
+                with self.lock:
+                    # 缓存输出到 buffer（用于 get_buffer）
+                    self.buffer.append(output)
+                    if len(self.buffer) > self.max_buffer_size:
+                        self.buffer.pop(0)
+                    
+                    # 添加到输出历史（用于多客户端同步）
+                    self.output_history.append({
+                        'index': self.output_index,
+                        'data': output,
+                        'timestamp': time.time()
+                    })
+                    self.output_index += 1
+                    
+                    # 限制历史记录大小
+                    if len(self.output_history) > self.max_buffer_size:
+                        self.output_history.pop(0)
                 
                 # 异步保存到数据库
                 self._save_buffer_to_db()
@@ -156,6 +173,47 @@ class TerminalSession:
         except OSError:
             pass
         return ""
+    
+    def get_new_output_for_client(self, client_id: str) -> str:
+        """获取客户端未读取的输出"""
+        with self.lock:
+            if client_id not in self.connected_clients:
+                return ""
+            
+            last_index = self.connected_clients[client_id]
+            new_outputs = []
+            
+            for item in self.output_history:
+                if item['index'] > last_index:
+                    new_outputs.append(item['data'])
+                    last_index = item['index']
+            
+            # 更新客户端的最后读取索引
+            if new_outputs:
+                self.connected_clients[client_id] = last_index
+            
+            return ''.join(new_outputs)
+    
+    def add_client(self, client_id: str) -> str:
+        """添加连接的客户端，返回历史缓冲区"""
+        with self.lock:
+            # 设置客户端的起始索引为当前索引
+            self.connected_clients[client_id] = self.output_index - 1
+            print(f"Client {client_id} connected to session {self.session_id}. Total clients: {len(self.connected_clients)}")
+            
+            # 返回完整的历史缓冲区
+            return self.get_buffer()
+    
+    def remove_client(self, client_id: str):
+        """移除断开的客户端"""
+        with self.lock:
+            self.connected_clients.pop(client_id, None)
+            print(f"Client {client_id} disconnected from session {self.session_id}. Remaining clients: {len(self.connected_clients)}")
+        print(f"Client {client_id} disconnected from session {self.session_id}. Remaining clients: {len(self.connected_clients)}")
+    
+    def has_clients(self) -> bool:
+        """检查是否有客户端连接"""
+        return len(self.connected_clients) > 0
     
     def get_buffer(self) -> str:
         """获取缓存的输出"""
@@ -172,112 +230,156 @@ class TerminalSession:
             return False
     
     def _save_to_db(self):
-        """保存会话到数据库"""
-        if not self.db:
-            return
-        
+        """保存会话到数据库 - 线程安全版本"""
         try:
-            session_db = self.db.query(TerminalSessionDB).filter(
-                TerminalSessionDB.id == self.session_id
-            ).first()
+            from ..db.database import SessionLocal
+            db = SessionLocal()
             
-            if session_db:
-                session_db.last_activity = self.last_activity
-                session_db.is_active = True
-                session_db.pid = self.child_pid
-                session_db.cwd = self.cwd
-                session_db.rows = self.rows
-                session_db.cols = self.cols
-            else:
-                session_db = TerminalSessionDB(
-                    id=self.session_id,
-                    username=self.username,
-                    name=self.name,
-                    last_activity=self.last_activity,
-                    created_at=time.time(),
-                    is_active=True,
-                    pid=self.child_pid,
-                    cwd=self.cwd,
-                    rows=self.rows,
-                    cols=self.cols
-                )
-                self.db.add(session_db)
-            
-            self.db.commit()
+            try:
+                session_db = db.query(TerminalSessionDB).filter(
+                    TerminalSessionDB.id == self.session_id
+                ).first()
+                
+                if session_db:
+                    session_db.last_activity = self.last_activity
+                    session_db.is_active = True
+                    session_db.pid = self.child_pid
+                    session_db.cwd = self.cwd
+                    session_db.rows = self.rows
+                    session_db.cols = self.cols
+                else:
+                    session_db = TerminalSessionDB(
+                        id=self.session_id,
+                        username=self.username,
+                        name=self.name,
+                        last_activity=self.last_activity,
+                        created_at=time.time(),
+                        is_active=True,
+                        pid=self.child_pid,
+                        cwd=self.cwd,
+                        rows=self.rows,
+                        cols=self.cols
+                    )
+                    db.add(session_db)
+                
+                db.commit()
+            finally:
+                db.close()
         except Exception as e:
             print(f"Error saving session to DB: {e}")
-            self.db.rollback()
     
     def _update_winsize_in_db(self):
-        """更新数据库中的终端尺寸"""
-        if not self.db:
-            return
-        
+        """更新数据库中的终端尺寸 - 线程安全版本"""
         try:
-            session_db = self.db.query(TerminalSessionDB).filter(
-                TerminalSessionDB.id == self.session_id
-            ).first()
+            from ..db.database import SessionLocal
+            db = SessionLocal()
             
-            if session_db:
-                session_db.rows = self.rows
-                session_db.cols = self.cols
-                self.db.commit()
+            try:
+                session_db = db.query(TerminalSessionDB).filter(
+                    TerminalSessionDB.id == self.session_id
+                ).first()
+                
+                if session_db:
+                    session_db.rows = self.rows
+                    session_db.cols = self.cols
+                    db.commit()
+            finally:
+                db.close()
         except Exception as e:
             print(f"Error updating winsize in DB: {e}")
-            self.db.rollback()
     
     def _save_buffer_to_db(self):
-        """保存缓冲区到数据库"""
-        if not self.db:
-            return
-        
+        """保存缓冲区到数据库 - 线程安全版本"""
         try:
-            session_db = self.db.query(TerminalSessionDB).filter(
-                TerminalSessionDB.id == self.session_id
-            ).first()
+            # 使用新的数据库会话，避免线程冲突
+            from ..db.database import SessionLocal
+            db = SessionLocal()
             
-            if session_db:
-                session_db.buffer = self.get_buffer()
-                session_db.last_activity = self.last_activity
-                self.db.commit()
+            try:
+                session_db = db.query(TerminalSessionDB).filter(
+                    TerminalSessionDB.id == self.session_id
+                ).first()
+                
+                if session_db:
+                    # 保存完整的缓冲区
+                    buffer_content = self.get_buffer()
+                    session_db.buffer = buffer_content
+                    session_db.last_activity = self.last_activity
+                    
+                    # 立即提交
+                    db.commit()
+                else:
+                    # 如果会话不存在，创建它
+                    session_db = TerminalSessionDB(
+                        id=self.session_id,
+                        username=self.username,
+                        name=self.name,
+                        last_activity=self.last_activity,
+                        created_at=time.time(),
+                        is_active=True,
+                        pid=self.child_pid,
+                        cwd=self.cwd,
+                        rows=self.rows,
+                        cols=self.cols,
+                        buffer=self.get_buffer()
+                    )
+                    db.add(session_db)
+                    db.commit()
+            finally:
+                db.close()
+                
         except Exception as e:
             print(f"Error saving buffer to DB: {e}")
-            self.db.rollback()
+            import traceback
+            traceback.print_exc()
     
     def _update_activity(self):
-        """更新最后活动时间"""
-        if not self.db:
-            return
-        
+        """更新最后活动时间 - 线程安全版本"""
         try:
-            session_db = self.db.query(TerminalSessionDB).filter(
-                TerminalSessionDB.id == self.session_id
-            ).first()
+            from ..db.database import SessionLocal
+            db = SessionLocal()
             
-            if session_db:
-                session_db.last_activity = self.last_activity
-                self.db.commit()
+            try:
+                session_db = db.query(TerminalSessionDB).filter(
+                    TerminalSessionDB.id == self.session_id
+                ).first()
+                
+                if session_db:
+                    session_db.last_activity = self.last_activity
+                    db.commit()
+            finally:
+                db.close()
         except Exception as e:
             print(f"Error updating activity: {e}")
-            self.db.rollback()
     
     def close(self):
         """关闭终端会话"""
         self.running = False
         
-        # 标记为不活跃
-        if self.db:
+        # 只有在没有客户端连接时才真正关闭
+        if self.has_clients():
+            print(f"Session {self.session_id} has active clients, keeping alive")
+            return
+        
+        print(f"Closing session {self.session_id}")
+        
+        # 标记为不活跃 - 使用独立的数据库会话
+        try:
+            from ..db.database import SessionLocal
+            db = SessionLocal()
+            
             try:
-                session_db = self.db.query(TerminalSessionDB).filter(
+                session_db = db.query(TerminalSessionDB).filter(
                     TerminalSessionDB.id == self.session_id
                 ).first()
                 
                 if session_db:
                     session_db.is_active = False
-                    self.db.commit()
-            except Exception as e:
-                print(f"Error marking session inactive: {e}")
-                self.db.rollback()
+                    db.commit()
+            finally:
+                db.close()
+        except Exception as e:
+            print(f"Error marking session inactive: {e}")
         
         if self.fd:
             try:
@@ -293,8 +395,9 @@ class TerminalSession:
 class TerminalManager:
     def __init__(self):
         self.sessions: Dict[str, TerminalSession] = {}
-        self.session_timeout = 3600  # 默认1小时，可通过配置更新
+        self.session_timeout = 3600 * 24 * 7  # 默认7天，支持长时间运行的任务
         self.buffer_size = 1000  # 默认1000行，可通过配置更新
+        self.background_tasks = {}  # 存储后台读取任务
         
     def update_config(self, session_timeout: int = None, buffer_size: int = None):
         """更新配置"""
@@ -305,8 +408,6 @@ class TerminalManager:
         
     def create_session(self, session_id: str, username: str, name: str, cols: int = 80, rows: int = 24, cwd: str = None) -> TerminalSession:
         """创建新的终端会话"""
-        db = SessionLocal()
-        
         if session_id in self.sessions:
             # 如果会话已存在且还活着，直接返回
             if self.sessions[session_id].is_alive():
@@ -314,10 +415,53 @@ class TerminalManager:
             # 否则清理旧会话
             self.sessions[session_id].close()
         
-        session = TerminalSession(session_id, username, name, self.buffer_size, db)
+        session = TerminalSession(session_id, username, name, self.buffer_size)
         session.start(cols, rows, cwd)
         self.sessions[session_id] = session
+        
+        # 启动后台读取任务，持续读取终端输出
+        self._start_background_reader(session_id)
+        
         return session
+    
+    def _start_background_reader(self, session_id: str):
+        """启动后台任务持续读取终端输出"""
+        import threading
+        
+        def read_loop():
+            """后台循环读取终端输出"""
+            last_save_time = time.time()
+            save_interval = 5  # 每5秒强制保存一次
+            
+            while session_id in self.sessions:
+                session = self.sessions.get(session_id)
+                if not session or not session.is_alive():
+                    break
+                
+                # 读取输出（即使没有客户端连接也继续读取）
+                session.read(timeout=0.1)
+                
+                # 定期强制保存到数据库
+                current_time = time.time()
+                if current_time - last_save_time >= save_interval:
+                    session._save_buffer_to_db()
+                    last_save_time = current_time
+                
+                time.sleep(0.01)
+            
+            # 退出前最后保存一次
+            if session_id in self.sessions:
+                session = self.sessions.get(session_id)
+                if session:
+                    session._save_buffer_to_db()
+            
+            print(f"Background reader for session {session_id} stopped")
+        
+        # 创建并启动后台线程
+        thread = threading.Thread(target=read_loop, daemon=True)
+        thread.start()
+        self.background_tasks[session_id] = thread
+        print(f"Started background reader for session {session_id}")
     
     def get_session(self, session_id: str) -> Optional[TerminalSession]:
         """获取终端会话"""
@@ -405,8 +549,19 @@ class TerminalManager:
             session = self.sessions[session_id]
             # 在关闭前保存最终的缓冲区
             session._save_buffer_to_db()
+            
+            # 清除所有客户端连接
+            session.connected_clients.clear()
+            
+            # 关闭会话
             session.close()
+            
+            # 从管理器中移除
             del self.sessions[session_id]
+            
+            # 清理后台任务
+            if session_id in self.background_tasks:
+                del self.background_tasks[session_id]
     
     def cleanup_inactive_sessions(self):
         """清理不活跃的会话"""

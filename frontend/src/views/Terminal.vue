@@ -1,5 +1,5 @@
 <template>
-  <div class="terminal-page">
+  <div class="terminal-page" :class="{ fullscreen: isFullscreen }">
     <div class="terminal-header">
       <h1 class="page-title">终端管理</h1>
       <a-button @click="showNewSessionModal" type="primary">
@@ -51,24 +51,36 @@
               <template #icon><ClockCircleOutlined /></template>
               {{ formatDate(getSessionInfo(session.id).created_at) }}
             </a-tag>
-            <a-tag color="green">
-              <template #icon><ColumnWidthOutlined /></template>
-              {{ getSessionInfo(session.id).cols }} × {{ getSessionInfo(session.id).rows }}
-            </a-tag>
             <a-tag color="purple">
               <template #icon><DatabaseOutlined /></template>
               {{ formatBufferSize(getSessionInfo(session.id).buffer_size) }}
+            </a-tag>
+            <a-tag 
+              v-if="getSessionInfo(session.id).connected_clients !== undefined"
+              :color="getSessionInfo(session.id).connected_clients > 1 ? 'orange' : 'cyan'"
+            >
+              <template #icon><TeamOutlined /></template>
+              {{ getSessionInfo(session.id).connected_clients }} 个客户端
+            </a-tag>
+            <a-tag 
+              v-if="getSessionInfo(session.id).running_in_background"
+              color="gold"
+            >
+              <template #icon><ThunderboltOutlined /></template>
+              后台运行中
             </a-tag>
           </div>
           <div class="info-right">
             <a-button 
               size="small" 
-              type="primary" 
-              @click="adaptTerminalSize(session.id)"
-              v-if="needsResize(session.id)"
+              @click="toggleFullscreen"
+              :type="isFullscreen ? 'primary' : 'default'"
             >
-              <template #icon><SyncOutlined /></template>
-              适配尺寸
+              <template #icon>
+                <FullscreenExitOutlined v-if="isFullscreen" />
+                <FullscreenOutlined v-else />
+              </template>
+              {{ isFullscreen ? '退出全屏' : '全屏' }}
             </a-button>
             <a-button 
               size="small" 
@@ -138,12 +150,6 @@
           <a-descriptions-item label="最后活动">
             {{ formatDateTime(selectedSessionDetails.last_activity) }}
           </a-descriptions-item>
-          <a-descriptions-item label="终端尺寸">
-            <a-tag color="green">{{ selectedSessionDetails.cols }} 列 × {{ selectedSessionDetails.rows }} 行</a-tag>
-          </a-descriptions-item>
-          <a-descriptions-item label="当前尺寸">
-            <a-tag color="blue">{{ getCurrentTerminalSize(selectedSessionDetails.id) }}</a-tag>
-          </a-descriptions-item>
           <a-descriptions-item label="缓存大小">
             {{ formatBufferSize(selectedSessionDetails.buffer_size) }}
           </a-descriptions-item>
@@ -157,18 +163,17 @@
             <a-badge :status="selectedSessionDetails.running ? 'processing' : 'default'" 
                      :text="selectedSessionDetails.running ? '运行中' : '已停止'" />
           </a-descriptions-item>
+          <a-descriptions-item label="连接客户端">
+            <a-tag :color="selectedSessionDetails.connected_clients > 1 ? 'orange' : 'cyan'">
+              {{ selectedSessionDetails.connected_clients || 0 }} 个
+            </a-tag>
+          </a-descriptions-item>
+          <a-descriptions-item label="后台运行">
+            <a-tag :color="selectedSessionDetails.running_in_background ? 'gold' : 'default'">
+              {{ selectedSessionDetails.running_in_background ? '是' : '否' }}
+            </a-tag>
+          </a-descriptions-item>
         </a-descriptions>
-        
-        <div style="margin-top: 16px; text-align: right;">
-          <a-button 
-            type="primary" 
-            @click="adaptTerminalSize(selectedSessionDetails.id)"
-            v-if="needsResize(selectedSessionDetails.id)"
-          >
-            <template #icon><SyncOutlined /></template>
-            适配到保存的尺寸
-          </a-button>
-        </div>
       </div>
     </a-modal>
   </div>
@@ -180,10 +185,12 @@ import { message } from 'ant-design-vue'
 import { 
   PlusOutlined, 
   ClockCircleOutlined, 
-  ColumnWidthOutlined, 
   DatabaseOutlined,
-  SyncOutlined,
-  InfoCircleOutlined
+  InfoCircleOutlined,
+  TeamOutlined,
+  ThunderboltOutlined,
+  FullscreenOutlined,
+  FullscreenExitOutlined
 } from '@ant-design/icons-vue'
 import { useAuthStore } from '../stores/auth'
 import { useConfigStore } from '../stores/config'
@@ -212,6 +219,7 @@ const validateMessage = ref('')
 const detailsModalVisible = ref(false)
 const selectedSessionDetails = ref(null)
 const sessionInfoMap = ref({}) // 存储会话详细信息
+const isFullscreen = ref(false) // 全屏状态
 let sessionCounter = 0
 
 const setTerminalRef = (id, el) => {
@@ -344,36 +352,107 @@ const connectWebSocket = (sessionId, sessionName, isReconnect = false) => {
   const cwd = terminalConfig.default_path || '~'
   const wsUrl = `ws://localhost:8000/api/v1/terminal/ws/${sessionId}?token=${authStore.token}&cwd=${encodeURIComponent(cwd)}&reconnect=${isReconnect}&name=${encodeURIComponent(sessionName)}`
   const ws = new WebSocket(wsUrl)
+  
+  let reconnectAttempts = 0
+  const maxReconnectAttempts = 5
+  const reconnectDelay = 2000
+  let heartbeatInterval = null
 
   ws.onopen = () => {
+    reconnectAttempts = 0
     if (isReconnect) {
       message.success(`${sessionName} 重连成功`)
     } else {
       message.success(`${sessionName} 连接成功`)
     }
+    
+    // 启动心跳
+    heartbeatInterval = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        try {
+          ws.send(JSON.stringify({ type: 'ping' }))
+        } catch (error) {
+          console.error('Failed to send heartbeat:', error)
+        }
+      }
+    }, 30000) // 每30秒发送一次心跳
   }
 
   ws.onmessage = (event) => {
-    const data = JSON.parse(event.data)
-    
-    if (data.type === 'reconnect') {
-      // 重连成功，恢复缓存的输出
-      terminalStore.terminals[sessionId]?.term.write(data.data)
-      message.info(data.message)
-    } else if (data.type === 'reconnect_failed') {
-      // 重连失败，会话已失效
-      message.warning(`${sessionName} 会话已失效，已创建新会话`)
-    } else if (data.type === 'output') {
-      terminalStore.terminals[sessionId]?.term.write(data.data)
+    try {
+      const data = JSON.parse(event.data)
+      
+      if (data.type === 'reconnect') {
+        // 重连成功，恢复缓存的输出
+        if (terminalStore.terminals[sessionId]?.term) {
+          terminalStore.terminals[sessionId].term.write(data.data)
+        }
+        if (data.message) {
+          message.info(data.message)
+        }
+      } else if (data.type === 'reconnect_failed') {
+        // 重连失败，会话已失效
+        message.warning(`${sessionName} 会话已失效，已创建新会话`)
+      } else if (data.type === 'output') {
+        // 正常输出
+        if (terminalStore.terminals[sessionId]?.term) {
+          terminalStore.terminals[sessionId].term.write(data.data)
+        }
+      } else if (data.type === 'error') {
+        // 错误消息
+        message.error(data.message || '终端错误')
+      } else if (data.type === 'pong') {
+        // 心跳响应，忽略
+      }
+    } catch (error) {
+      console.error('Failed to parse WebSocket message:', error)
     }
   }
 
-  ws.onerror = () => {
-    message.error(`${sessionName} 连接错误`)
+  ws.onerror = (error) => {
+    console.error(`${sessionName} WebSocket 错误:`, error)
   }
 
-  ws.onclose = () => {
-    message.info(`${sessionName} 连接已关闭`)
+  ws.onclose = (event) => {
+    console.log(`${sessionName} WebSocket 连接已关闭`, event.code, event.reason)
+    
+    // 清除心跳
+    if (heartbeatInterval) {
+      clearInterval(heartbeatInterval)
+      heartbeatInterval = null
+    }
+    
+    // 如果不是正常关闭，尝试重连
+    if (event.code !== 1000 && reconnectAttempts < maxReconnectAttempts) {
+      reconnectAttempts++
+      console.log(`尝试重连 ${sessionName} (${reconnectAttempts}/${maxReconnectAttempts})`)
+      
+      setTimeout(() => {
+        // 检查会话是否还存在
+        if (terminalStore.sessions.find(s => s.id === sessionId)) {
+          const newWs = connectWebSocket(sessionId, sessionName, true)
+          terminalStore.websockets[sessionId] = newWs
+          
+          // 重新绑定事件
+          const terminal = terminalStore.terminals[sessionId]
+          if (terminal && terminal.term) {
+            terminal.term.onData(data => {
+              if (newWs.readyState === WebSocket.OPEN) {
+                newWs.send(JSON.stringify({ type: 'input', data }))
+              }
+            })
+            
+            terminal.term.onResize(({ cols, rows }) => {
+              if (newWs.readyState === WebSocket.OPEN) {
+                newWs.send(JSON.stringify({ type: 'resize', cols, rows }))
+              }
+            })
+          }
+        }
+      }, reconnectDelay)
+    } else if (reconnectAttempts >= maxReconnectAttempts) {
+      message.error(`${sessionName} 重连失败，请刷新页面`)
+    }
   }
 
   terminalStore.websockets[sessionId] = ws
@@ -621,6 +700,23 @@ const getSessionInfo = (sessionId) => {
   return sessionInfoMap.value[sessionId]
 }
 
+// 定期更新会话状态
+const updateSessionStatus = async (sessionId) => {
+  try {
+    const response = await terminalApi.getSessionStatus(sessionId)
+    if (response.data) {
+      const info = sessionInfoMap.value[sessionId]
+      if (info) {
+        info.connected_clients = response.data.connected_clients || 0
+        info.running_in_background = response.data.running_in_background || false
+        info.alive = response.data.alive || false
+      }
+    }
+  } catch (error) {
+    console.error('Failed to update session status:', error)
+  }
+}
+
 // 格式化日期
 const formatDate = (timestamp) => {
   if (!timestamp) return 'N/A'
@@ -666,64 +762,40 @@ const getCurrentTerminalSize = (sessionId) => {
   return 'N/A'
 }
 
-// 检查是否需要调整尺寸
-const needsResize = (sessionId) => {
-  const info = sessionInfoMap.value[sessionId]
-  const terminal = terminalStore.terminals[sessionId]
-  
-  if (!info || !terminal || !terminal.term) return false
-  
-  // 如果当前尺寸与保存的尺寸不同，显示适配按钮
-  return terminal.term.cols !== info.cols || terminal.term.rows !== info.rows
-}
-
-// 适配终端尺寸
-const adaptTerminalSize = (sessionId) => {
-  const info = sessionInfoMap.value[sessionId]
-  const terminal = terminalStore.terminals[sessionId]
-  
-  if (!info || !terminal || !terminal.term) {
-    message.error('无法适配尺寸')
-    return
-  }
-  
-  try {
-    // 调整终端尺寸到保存的值
-    terminal.term.resize(info.cols, info.rows)
-    
-    // 发送 resize 消息到后端
-    const ws = terminalStore.websockets[sessionId]
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ 
-        type: 'resize', 
-        cols: info.cols, 
-        rows: info.rows 
-      }))
-    }
-    
-    // 调整容器大小
-    setTimeout(() => {
-      try {
-        terminal.fitAddon.fit()
-      } catch (e) {
-        console.warn('Failed to fit after resize:', e)
-      }
-    }, 100)
-    
-    message.success('尺寸已适配')
-  } catch (error) {
-    console.error('Failed to adapt terminal size:', error)
-    message.error('适配尺寸失败')
-  }
-}
-
-// 显示会话详情
+// 全屏切换
 const showSessionDetails = (sessionId) => {
   const info = sessionInfoMap.value[sessionId]
   if (info) {
     selectedSessionDetails.value = { ...info }
     detailsModalVisible.value = true
   }
+}
+
+// 全屏切换
+const toggleFullscreen = () => {
+  isFullscreen.value = !isFullscreen.value
+  
+  // 延迟调整终端尺寸以适应新的容器大小
+  nextTick(() => {
+    setTimeout(() => {
+      const activeSessionId = terminalStore.activeSession
+      if (activeSessionId && terminalStore.terminals[activeSessionId]) {
+        try {
+          const terminal = terminalStore.terminals[activeSessionId]
+          const container = terminalStore.terminalRefs[activeSessionId]
+          
+          if (terminal && terminal.fitAddon && container) {
+            const rect = container.getBoundingClientRect()
+            if (rect.width > 0 && rect.height > 0) {
+              terminal.fitAddon.fit()
+            }
+          }
+        } catch (e) {
+          console.warn('Failed to fit terminal after fullscreen toggle:', e)
+        }
+      }
+    }, 100)
+  })
 }
 
 // 监听活动会话变化，调整终端尺寸
@@ -750,8 +822,18 @@ watch(() => terminalStore.activeSession, async (newSessionId) => {
   }
 })
 
+// ESC 键处理函数
+const handleEscape = (event) => {
+  if (event.key === 'Escape' && isFullscreen.value) {
+    toggleFullscreen()
+  }
+}
+
 onMounted(async () => {
   await configStore.loadConfig()
+  
+  // 添加 ESC 键监听，退出全屏
+  window.addEventListener('keydown', handleEscape)
   
   // 检查是否有已存在的终端实例（keep-alive 缓存）
   const hasExistingTerminals = Object.keys(terminalStore.terminals).length > 0
@@ -759,6 +841,14 @@ onMounted(async () => {
   if (hasExistingTerminals) {
     // 有已存在的终端实例，无需重新创建
     console.log('Terminal component activated from cache')
+    
+    // 但需要更新会话状态
+    for (const session of terminalStore.sessions) {
+      updateSessionStatus(session.id)
+    }
+    
+    // 启动定期状态更新
+    startStatusUpdater()
     return
   }
   
@@ -790,7 +880,9 @@ onMounted(async () => {
           running: s.running,
           cwd: s.cwd,
           pid: s.pid,
-          buffer_size: 0 // 将在重连后更新
+          buffer_size: 0,
+          connected_clients: 0,
+          running_in_background: false
         }
       })
       
@@ -865,6 +957,9 @@ onMounted(async () => {
               terminalStore.terminals[session.id].resizeObserver = resizeObserver
             }
             
+            // 更新会话状态
+            updateSessionStatus(session.id)
+            
             successCount++
           } catch (error) {
             console.error(`Failed to restore session ${session.id}:`, error)
@@ -885,6 +980,9 @@ onMounted(async () => {
       terminalStore.clearSessions()
       addSession('默认终端')
     }
+    
+    // 启动定期状态更新
+    startStatusUpdater()
   } catch (error) {
     console.error('Failed to load sessions from server:', error)
     message.error('加载会话失败，已创建新会话')
@@ -895,11 +993,41 @@ onMounted(async () => {
   }
 })
 
+// 定期更新会话状态
+let statusUpdateInterval = null
+const startStatusUpdater = () => {
+  // 清除旧的定时器
+  if (statusUpdateInterval) {
+    clearInterval(statusUpdateInterval)
+  }
+  
+  // 每5秒更新一次所有会话的状态
+  statusUpdateInterval = setInterval(() => {
+    for (const session of terminalStore.sessions) {
+      updateSessionStatus(session.id)
+    }
+  }, 5000)
+}
+
 onUnmounted(() => {
   // 不关闭 WebSocket 连接，保持会话活跃
   // 当用户切换菜单时，终端会话继续在后台运行
   // 只清理 DOM 相关的资源，不清理网络连接
   console.log('Terminal component unmounted, keeping sessions alive')
+  
+  // 清除状态更新定时器
+  if (statusUpdateInterval) {
+    clearInterval(statusUpdateInterval)
+    statusUpdateInterval = null
+  }
+  
+  // 移除 ESC 键监听
+  window.removeEventListener('keydown', handleEscape)
+  
+  // 退出全屏
+  if (isFullscreen.value) {
+    isFullscreen.value = false
+  }
 })
 </script>
 
@@ -909,6 +1037,20 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  transition: all 0.3s ease;
+}
+
+/* 全屏模式 */
+.terminal-page.fullscreen {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 9999;
+  background: #fff;
+  padding: 0;
+  margin: 0;
 }
 
 .terminal-header {
@@ -919,6 +1061,11 @@ onUnmounted(() => {
   padding-bottom: 16px;
   border-bottom: 2px solid #f0f0f0;
   flex-shrink: 0;
+}
+
+/* 全屏模式下隐藏标题 */
+.fullscreen .terminal-header {
+  display: none;
 }
 
 .page-title {
@@ -956,6 +1103,18 @@ onUnmounted(() => {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
   overflow: hidden;
   min-height: 0;
+}
+
+/* 全屏模式下的终端标签页 */
+.fullscreen .terminal-tabs {
+  border-radius: 0;
+  padding: 8px;
+  height: 100vh;
+}
+
+/* 全屏模式下的终端容器 */
+.fullscreen .terminal-container {
+  border-radius: 0;
 }
 
 :deep(.ant-tabs) {

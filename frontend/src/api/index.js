@@ -40,6 +40,12 @@ export const terminalApi = {
   // 检查会话状态
   checkSessionStatus: (sessionId) => {
     return api.get(`/api/v1/terminal/session/${sessionId}/status`)
+  },
+  
+  // 获取会话详细状态
+  getSessionStatus: (sessionId) => {
+    const token = localStorage.getItem('token')
+    return api.get(`/api/v1/terminal/session/${sessionId}/status?token=${token}`)
   }
 }
 
