@@ -1,29 +1,20 @@
-# 终端会话持久化修复
+# 终端会话持久化修复（最终版）
 
-## 问题描述
-当用户在终端页面创建会话后，切换到其他菜单（如 Dashboard 或 Settings），再切换回终端页面时：
-- 显示"正在恢复会话..."提示
-- 但实际上会话恢复失败
-- 终端内容丢失，需要重新创建
+## 问题历史
 
-## 根本原因
+### 问题 1：切换菜单时会话丢失
+**现象**：切换到其他菜单再返回时，显示"正在恢复会话..."但恢复失败。
+**原因**：组件被销毁，终端实例和 WebSocket 连接丢失。
+**解决**：使用 keep-alive 缓存组件。
 
-### 1. 组件生命周期问题
-- Vue Router 默认会销毁不活跃的路由组件
-- 当切换菜单时，Terminal 组件被卸载（unmounted）
-- 组件卸载时，xterm.js 终端实例被销毁
-- WebSocket 连接也被关闭
-- 只有会话 ID 和名称保存在 localStorage 中
-
-### 2. 重连失败
-- 组件重新挂载时，尝试从 localStorage 恢复会话
-- 但后端的会话可能已经超时或不存在
-- 前端没有调用后端 API 验证会话是否还活跃
-- 导致重连失败，但用户看到"正在恢复会话..."的误导信息
+### 问题 2：刷新页面时重置所有终端
+**现象**：刷新浏览器页面后，所有终端会话被重置为默认终端。
+**原因**：优先从后端获取会话，但后端可能没有返回会话（超时或清理），导致创建新的默认终端。
+**解决**：优先使用 localStorage 中的会话信息，只有在本地没有会话时才从后端获取。
 
 ## 解决方案
 
-### 1. 使用 keep-alive 缓存组件
+### 1. 使用 keep-alive 缓存组件（解决切换菜单问题）
 Vue 的 `<keep-alive>` 可以缓存组件实例，避免组件被销毁。
 
 **修改 Layout.vue**：
@@ -46,8 +37,42 @@ defineOptions({
 })
 ```
 
-### 2. 添加后端会话列表 API
-前端调用后端 API 获取活跃会话列表，而不是只依赖 localStorage。
+### 2. 优先使用 localStorage（解决刷新重置问题）
+刷新页面时，优先从 localStorage 恢复会话，而不是从后端获取。
+
+**恢复优先级**：
+1. **keep-alive 缓存**（切换菜单时）- 最高优先级
+2. **localStorage**（刷新页面时）- 次优先级
+3. **后端 API**（首次访问或 localStorage 为空时）- 最低优先级
+
+**修改 onMounted 逻辑**：
+```javascript
+onMounted(async () => {
+  // 1. 检查 keep-alive 缓存
+  const hasExistingTerminals = Object.keys(terminalStore.terminals).length > 0
+  if (hasExistingTerminals) {
+    return  // 直接使用缓存
+  }
+  
+  // 2. 尝试从 localStorage 恢复
+  terminalStore.loadSessions()
+  const localSessions = terminalStore.sessions
+  
+  if (localSessions.length > 0) {
+    // 有本地会话，尝试重连
+    for (const session of localSessions) {
+      // 创建终端实例并重连
+    }
+  } else {
+    // 3. 从后端获取会话
+    const response = await terminalApi.getSessions()
+    // ...
+  }
+})
+```
+
+### 3. 添加后端会话列表 API（备用方案）
+前端可以调用后端 API 获取活跃会话列表，作为备用方案。
 
 **添加 API 方法（frontend/src/api/index.js）**：
 ```javascript
@@ -63,40 +88,6 @@ export const terminalApi = {
     return api.get(`/api/v1/terminal/session/${sessionId}/status`)
   }
 }
-```
-
-### 3. 优化 onMounted 逻辑
-组件挂载时，先检查是否有缓存的终端实例，如果有则直接使用，无需重新创建。
-
-```javascript
-onMounted(async () => {
-  await configStore.loadConfig()
-  
-  // 检查是否有已存在的终端实例（keep-alive 缓存）
-  const hasExistingTerminals = Object.keys(terminalStore.terminals).length > 0
-  
-  if (hasExistingTerminals) {
-    // 有已存在的终端实例，无需重新创建
-    console.log('Terminal component activated from cache')
-    return
-  }
-  
-  // 首次加载，从后端获取活跃会话列表
-  try {
-    const response = await terminalApi.getSessions()
-    const activeSessions = response.data.sessions || []
-    
-    if (activeSessions.length > 0) {
-      // 恢复活跃会话
-      // ...
-    } else {
-      // 创建默认终端
-      addSession('默认终端')
-    }
-  } catch (error) {
-    // 错误处理
-  }
-})
 ```
 
 ## 技术要点
@@ -129,9 +120,11 @@ onMounted 触发
   ↓
 检查 terminalStore.terminals（空）
   ↓
+检查 localStorage（空）
+  ↓
 调用 terminalApi.getSessions()
   ↓
-后端返回活跃会话列表
+后端返回活跃会话列表（或空）
   ↓
 创建终端实例并连接 WebSocket
   ↓
@@ -164,6 +157,27 @@ onMounted 不会再次触发
 WebSocket 连接仍然活跃
 ```
 
+### 刷新浏览器页面（新增）
+```
+用户刷新页面
+  ↓
+所有组件重新创建（keep-alive 缓存清空）
+  ↓
+onMounted 触发
+  ↓
+检查 terminalStore.terminals（空）
+  ↓
+检查 localStorage（有数据）✅
+  ↓
+使用 localStorage 中的会话信息
+  ↓
+创建终端实例并尝试重连
+  ↓
+WebSocket 重连到后端会话
+  ↓
+恢复终端内容
+```
+
 ## 后端支持
 
 后端已经实现了完整的会话管理：
@@ -184,30 +198,36 @@ WebSocket 连接仍然活跃
 
 ## 测试场景
 
-### 场景 1：正常切换
+### 场景 1：正常切换（keep-alive）
 1. 打开终端页面，创建 2 个会话
 2. 在终端中执行一些命令
 3. 切换到 Dashboard
 4. 切换回终端页面
-5. **预期**: 终端立即显示，内容完整，无需重连
+5. **预期**: 终端立即显示，内容完整，无需重连 ✅
 
-### 场景 2：页面刷新
-1. 打开终端页面，创建会话
-2. 刷新浏览器页面
-3. **预期**: 从后端恢复会话，显示"正在恢复会话..."，然后成功恢复
+### 场景 2：页面刷新（localStorage）
+1. 打开终端页面，创建 2 个会话
+2. 在终端中执行命令
+3. 刷新浏览器页面
+4. **预期**: 显示"正在恢复会话..."，然后成功恢复 2 个会话 ✅
 
 ### 场景 3：会话超时
 1. 打开终端页面，创建会话
 2. 等待超过超时时间（默认 1 小时）
 3. 刷新页面
-4. **预期**: 后端返回空会话列表，创建新的默认终端
+4. **预期**: 尝试重连，如果失败则显示警告并创建新会话
 
-### 场景 4：多标签页
-1. 在标签页 A 打开终端
+### 场景 4：清空 localStorage
+1. 打开终端页面，创建会话
+2. 手动清空 localStorage
+3. 刷新页面
+4. **预期**: 从后端获取会话列表，如果后端有会话则恢复，否则创建默认终端
+
+### 场景 5：多标签页
+1. 在标签页 A 打开终端，创建会话
 2. 在标签页 B 打开同一个应用
-3. 在标签页 A 创建会话
-4. 在标签页 B 刷新
-5. **预期**: 标签页 B 可以看到标签页 A 创建的会话
+3. 在标签页 B 刷新
+4. **预期**: 标签页 B 从 localStorage 恢复会话（可能与标签页 A 不同步）
 
 ## 优势
 

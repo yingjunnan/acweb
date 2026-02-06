@@ -317,7 +317,10 @@ class TerminalManager:
     def close_session(self, session_id: str):
         """关闭终端会话"""
         if session_id in self.sessions:
-            self.sessions[session_id].close()
+            session = self.sessions[session_id]
+            # 在关闭前保存最终的缓冲区
+            session._save_buffer_to_db()
+            session.close()
             del self.sessions[session_id]
     
     def cleanup_inactive_sessions(self):

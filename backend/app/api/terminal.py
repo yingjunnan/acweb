@@ -83,6 +83,8 @@ async def websocket_endpoint(
             elif data["type"] == "resize":
                 session.set_winsize(data["rows"], data["cols"])
             elif data["type"] == "close":
+                # 用户明确关闭会话，真正关闭它
+                terminal_manager.close_session(session_id)
                 break
                 
     except WebSocketDisconnect:
@@ -91,7 +93,13 @@ async def websocket_endpoint(
         print(f"WebSocket error: {e}")
     finally:
         read_task.cancel()
-        terminal_manager.close_session(session_id)
+        # WebSocket 断开时不关闭会话，保持会话活跃以便重连
+        # 只有在收到 close 消息时才真正关闭会话
+        
+        # 保存最终的缓冲区到数据库
+        if session and session_id in terminal_manager.sessions:
+            session._save_buffer_to_db()
+        
         await websocket.close()
 
 @router.get("/sessions")
