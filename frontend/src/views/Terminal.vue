@@ -151,8 +151,9 @@ const createTerminal = (sessionId) => {
   term.loadAddon(webLinksAddon)
   
   // 尝试加载 WebGL 渲染器以提高性能
+  let webglAddon = null
   try {
-    const webglAddon = new WebglAddon()
+    webglAddon = new WebglAddon()
     webglAddon.onContextLoss(() => {
       webglAddon.dispose()
     })
@@ -161,7 +162,13 @@ const createTerminal = (sessionId) => {
     console.warn('WebGL addon could not be loaded, falling back to canvas renderer', e)
   }
 
-  terminalStore.terminals[sessionId] = { term, fitAddon }
+  // 保存所有 addon 引用以便后续清理
+  terminalStore.terminals[sessionId] = { 
+    term, 
+    fitAddon, 
+    webLinksAddon,
+    webglAddon 
+  }
   return { term, fitAddon }
 }
 
@@ -281,10 +288,13 @@ const addSession = async (name, isReconnect = false) => {
     const { term, fitAddon } = createTerminal(sessionId)
     term.open(container)
     
-    // 延迟调整大小，确保容器已经渲染
+    // 延迟调整大小，确保容器已经渲染且可见
     setTimeout(() => {
       try {
-        fitAddon.fit()
+        const rect = container.getBoundingClientRect()
+        if (rect.width > 0 && rect.height > 0) {
+          fitAddon.fit()
+        }
       } catch (e) {
         console.warn('Failed to fit terminal:', e)
       }
@@ -304,14 +314,25 @@ const addSession = async (name, isReconnect = false) => {
       }
     })
 
-    const resizeObserver = new ResizeObserver(() => {
-      try {
-        fitAddon.fit()
-      } catch (e) {
-        console.warn('Failed to fit terminal on resize:', e)
+    // ResizeObserver 只在容器可见时调用 fit
+    const resizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        // 检查容器是否可见且有实际尺寸
+        if (entry.contentRect.width > 0 && entry.contentRect.height > 0) {
+          try {
+            fitAddon.fit()
+          } catch (e) {
+            console.warn('Failed to fit terminal on resize:', e)
+          }
+        }
       }
     })
     resizeObserver.observe(container)
+    
+    // 保存 resizeObserver 以便后续清理
+    if (!terminalStore.terminals[sessionId].resizeObserver) {
+      terminalStore.terminals[sessionId].resizeObserver = resizeObserver
+    }
     
     // 显示创建成功消息
     if (!isReconnect) {
@@ -325,21 +346,83 @@ const removeSession = (sessionId) => {
   const session = terminalStore.sessions.find(s => s.id === sessionId)
   const sessionName = session ? session.name : '未知终端'
   
+  // 先关闭 WebSocket
   const ws = terminalStore.websockets[sessionId]
   if (ws) {
-    ws.send(JSON.stringify({ type: 'close' }))
-    ws.close()
+    try {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'close' }))
+      }
+      ws.close()
+    } catch (e) {
+      console.warn('Failed to close websocket:', e)
+    }
     delete terminalStore.websockets[sessionId]
   }
 
+  // 清理终端实例
   const terminal = terminalStore.terminals[sessionId]
   if (terminal) {
-    terminal.term.dispose()
+    try {
+      // 1. 先断开 ResizeObserver
+      if (terminal.resizeObserver) {
+        terminal.resizeObserver.disconnect()
+        delete terminal.resizeObserver
+      }
+      
+      // 2. 手动清理 WebGL addon（这是导致错误的主要原因）
+      if (terminal.webglAddon) {
+        try {
+          terminal.webglAddon.dispose()
+        } catch (e) {
+          // WebGL addon dispose 可能失败，忽略错误
+        }
+        delete terminal.webglAddon
+      }
+      
+      // 3. 清理其他 addons
+      if (terminal.webLinksAddon) {
+        try {
+          terminal.webLinksAddon.dispose()
+        } catch (e) {
+          // 忽略错误
+        }
+        delete terminal.webLinksAddon
+      }
+      
+      if (terminal.fitAddon) {
+        try {
+          terminal.fitAddon.dispose()
+        } catch (e) {
+          // 忽略错误
+        }
+        delete terminal.fitAddon
+      }
+      
+      // 4. 最后清理终端实例
+      if (terminal.term) {
+        try {
+          terminal.term.dispose()
+        } catch (e) {
+          // 即使 dispose 失败也继续清理
+          console.warn('Terminal dispose had issues, but continuing cleanup')
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to dispose terminal:', e)
+    }
     delete terminalStore.terminals[sessionId]
   }
 
+  // 删除 terminalRef
+  if (terminalStore.terminalRefs[sessionId]) {
+    delete terminalStore.terminalRefs[sessionId]
+  }
+
+  // 更新会话列表
   terminalStore.sessions = terminalStore.sessions.filter(s => s.id !== sessionId)
 
+  // 如果删除的是当前活动会话，切换到第一个会话
   if (terminalStore.sessions.length > 0 && terminalStore.activeSession === sessionId) {
     terminalStore.activeSession = terminalStore.sessions[0].id
   }
@@ -361,17 +444,23 @@ const onEdit = (targetKey, action) => {
 watch(() => terminalStore.activeSession, async (newSessionId) => {
   if (newSessionId && terminalStore.terminals[newSessionId]) {
     await nextTick()
-    // 延迟调整尺寸，确保标签页切换动画完成
+    // 延迟调整尺寸，确保标签页切换动画完成且容器可见
     setTimeout(() => {
       try {
         const terminal = terminalStore.terminals[newSessionId]
-        if (terminal && terminal.fitAddon) {
-          terminal.fitAddon.fit()
+        const container = terminalStore.terminalRefs[newSessionId]
+        
+        // 只有当容器可见且有实际尺寸时才调整
+        if (terminal && terminal.fitAddon && container) {
+          const rect = container.getBoundingClientRect()
+          if (rect.width > 0 && rect.height > 0) {
+            terminal.fitAddon.fit()
+          }
         }
       } catch (e) {
         console.warn('Failed to fit terminal on tab switch:', e)
       }
-    }, 150)
+    }, 200)
   }
 })
 
@@ -398,7 +487,10 @@ onMounted(async () => {
         
         setTimeout(() => {
           try {
-            fitAddon.fit()
+            const rect = container.getBoundingClientRect()
+            if (rect.width > 0 && rect.height > 0) {
+              fitAddon.fit()
+            }
           } catch (e) {
             console.warn('Failed to fit terminal on mount:', e)
           }
@@ -419,14 +511,24 @@ onMounted(async () => {
           }
         })
 
-        const resizeObserver = new ResizeObserver(() => {
-          try {
-            fitAddon.fit()
-          } catch (e) {
-            console.warn('Failed to fit terminal on resize:', e)
+        // ResizeObserver 只在容器可见时调用 fit
+        const resizeObserver = new ResizeObserver((entries) => {
+          for (const entry of entries) {
+            if (entry.contentRect.width > 0 && entry.contentRect.height > 0) {
+              try {
+                fitAddon.fit()
+              } catch (e) {
+                console.warn('Failed to fit terminal on resize:', e)
+              }
+            }
           }
         })
         resizeObserver.observe(container)
+        
+        // 保存 resizeObserver
+        if (!terminalStore.terminals[session.id].resizeObserver) {
+          terminalStore.terminals[session.id].resizeObserver = resizeObserver
+        }
       }
     }
   }

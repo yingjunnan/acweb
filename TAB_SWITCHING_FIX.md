@@ -1,112 +1,151 @@
-# 终端标签页切换内容丢失问题修复
+# 终端标签页切换内容丢失问题修复（第二版）
 
 ## 问题描述
 在多个终端标签页之间来回切换时，终端显示的内容会逐渐减少，好像每次切换都会删除几行输出。
 
-## 根本原因
-1. **终端实例管理问题**: 虽然使用了 `:force-render="true"` 保持所有标签页渲染，但在某些情况下终端实例可能被重复操作
-2. **fit() 调用时机**: 在标签页切换时调用 `fitAddon.fit()` 可能在 DOM 还未完全稳定时执行，导致计算错误
-3. **缺少错误处理**: fit() 调用失败时没有捕获异常，可能导致后续操作中断
+## 根本原因分析
+
+### 核心问题：fitAddon.fit() 在不可见容器上调用
+当调用 `fitAddon.fit()` 时，它会根据容器的实际尺寸重新计算终端的行列数（cols/rows）。
+
+**问题场景**：
+1. 用户切换到标签页 B
+2. 标签页 A 的容器变为不可见或尺寸为 0
+3. 如果此时对标签页 A 调用 `fit()`，容器尺寸为 0 或很小
+4. 终端被调整为极小的尺寸（如 1 行 × 10 列）
+5. 超出新尺寸的内容被截断丢失
+6. 即使切换回标签页 A，内容已经永久丢失
+
+### 为什么会触发 fit()？
+- **标签页切换时的 watch**: 切换标签页时主动调用 fit()
+- **ResizeObserver**: 容器尺寸变化时自动调用 fit()
+- **问题**: 这些调用没有检查容器是否真正可见
 
 ## 修复方案
 
-### 1. 增强 watch 函数的安全性
+### 1. 在 watch 中检查容器可见性和尺寸
 ```javascript
-// 修复前
-watch(() => terminalStore.activeSession, async (newSessionId) => {
-  if (newSessionId) {
-    await nextTick()
-    const terminal = terminalStore.terminals[newSessionId]
-    if (terminal) {
-      setTimeout(() => {
-        terminal.fitAddon.fit()
-      }, 100)
-    }
-  }
-})
-
-// 修复后
 watch(() => terminalStore.activeSession, async (newSessionId) => {
   if (newSessionId && terminalStore.terminals[newSessionId]) {
     await nextTick()
-    // 延迟调整尺寸，确保标签页切换动画完成
     setTimeout(() => {
       try {
         const terminal = terminalStore.terminals[newSessionId]
-        if (terminal && terminal.fitAddon) {
-          terminal.fitAddon.fit()
+        const container = terminalStore.terminalRefs[newSessionId]
+        
+        // 关键：只有当容器可见且有实际尺寸时才调整
+        if (terminal && terminal.fitAddon && container) {
+          const rect = container.getBoundingClientRect()
+          if (rect.width > 0 && rect.height > 0) {
+            terminal.fitAddon.fit()
+          }
         }
       } catch (e) {
         console.warn('Failed to fit terminal on tab switch:', e)
       }
-    }, 150)
+    }, 200)
   }
 })
 ```
 
-**改进点**:
-- 增加了终端实例存在性检查: `terminalStore.terminals[newSessionId]`
-- 在 setTimeout 内部再次检查 terminal 和 fitAddon 是否存在
-- 添加 try-catch 错误处理，防止 fit() 失败影响其他操作
-- 延迟时间从 100ms 增加到 150ms，确保标签页切换动画完成
+**改进点**：
+- 使用 `getBoundingClientRect()` 检查容器实际尺寸
+- 只有当 `width > 0 && height > 0` 时才调用 fit()
+- 延迟增加到 200ms，确保标签页切换动画完成
 
-### 2. 为所有 fit() 调用添加错误处理
+### 2. 在 ResizeObserver 中检查尺寸
+```javascript
+const resizeObserver = new ResizeObserver((entries) => {
+  for (const entry of entries) {
+    // 检查容器是否可见且有实际尺寸
+    if (entry.contentRect.width > 0 && entry.contentRect.height > 0) {
+      try {
+        fitAddon.fit()
+      } catch (e) {
+        console.warn('Failed to fit terminal on resize:', e)
+      }
+    }
+  }
+})
+```
 
-在 `addSession` 函数中:
+**改进点**：
+- 使用 `entry.contentRect` 检查实际内容尺寸
+- 只有当尺寸大于 0 时才调用 fit()
+- 避免在容器隐藏时调整终端尺寸
+
+### 3. 在初始化时检查容器尺寸
+在 `addSession` 和 `onMounted` 中：
 ```javascript
 setTimeout(() => {
   try {
-    fitAddon.fit()
+    const rect = container.getBoundingClientRect()
+    if (rect.width > 0 && rect.height > 0) {
+      fitAddon.fit()
+    }
   } catch (e) {
     console.warn('Failed to fit terminal:', e)
   }
 }, 100)
-
-const resizeObserver = new ResizeObserver(() => {
-  try {
-    fitAddon.fit()
-  } catch (e) {
-    console.warn('Failed to fit terminal on resize:', e)
-  }
-})
 ```
 
-在 `onMounted` 函数中:
+### 4. 清理 ResizeObserver
+在 `removeSession` 中添加清理逻辑：
 ```javascript
-setTimeout(() => {
-  try {
-    fitAddon.fit()
-  } catch (e) {
-    console.warn('Failed to fit terminal on mount:', e)
-  }
-}, 100)
-
-const resizeObserver = new ResizeObserver(() => {
-  try {
-    fitAddon.fit()
-  } catch (e) {
-    console.warn('Failed to fit terminal on resize:', e)
-  }
-})
+if (terminal.resizeObserver) {
+  terminal.resizeObserver.disconnect()
+}
 ```
-
-### 3. 保持终端实例的唯一性
-代码中已经有检查 `!terminalStore.terminals[sessionId]`，确保每个会话只创建一次终端实例。配合 `:force-render="true"`，所有标签页的 DOM 都会保持渲染状态，终端实例不会被销毁和重建。
-
-## 测试建议
-1. 创建 3-5 个终端会话
-2. 在每个终端中执行一些命令，产生输出
-3. 快速在标签页之间来回切换 10-20 次
-4. 验证每个终端的内容是否完整保留
-5. 检查浏览器控制台是否有错误信息
 
 ## 技术要点
-- **`:force-render="true"`**: 确保所有标签页的 DOM 始终渲染，不会被销毁
-- **终端实例缓存**: 通过 `terminalStore.terminals` 缓存所有终端实例
-- **延迟 fit()**: 给 DOM 足够时间完成渲染和动画
-- **错误处理**: 防止单个 fit() 失败影响整体功能
-- **双重检查**: 在操作前检查对象是否存在，避免空指针错误
+
+### getBoundingClientRect() vs contentRect
+- **getBoundingClientRect()**: 返回元素相对于视口的位置和尺寸
+- **contentRect**: ResizeObserver 提供的内容区域尺寸
+- 两者都可以用来判断容器是否可见
+
+### 为什么需要延迟？
+- 标签页切换有动画效果（通常 150-200ms）
+- DOM 更新需要时间
+- 延迟确保容器已经完全渲染且可见
+
+### :force-render="true" 的作用
+- 保持所有标签页的 DOM 始终渲染
+- 避免标签页切换时重新创建终端实例
+- 但不能阻止 fit() 在隐藏容器上调用
+
+## 测试建议
+
+### 基础测试
+1. 创建 3 个终端会话
+2. 在每个终端执行：`seq 1 100`（输出 100 行）
+3. 快速切换标签页 20 次
+4. 检查每个终端是否仍有 100 行输出
+
+### 压力测试
+1. 创建 5 个终端会话
+2. 在每个终端执行：`cat /var/log/system.log`（大量输出）
+3. 疯狂快速切换标签页
+4. 检查内容是否完整
+
+### 调试方法
+在浏览器控制台执行：
+```javascript
+// 查看当前活动终端的尺寸
+const activeId = terminalStore.activeSession
+const terminal = terminalStore.terminals[activeId]
+console.log('Cols:', terminal.term.cols, 'Rows:', terminal.term.rows)
+
+// 查看容器尺寸
+const container = terminalStore.terminalRefs[activeId]
+const rect = container.getBoundingClientRect()
+console.log('Container:', rect.width, 'x', rect.height)
+```
 
 ## 相关文件
 - `frontend/src/views/Terminal.vue`: 主要修复文件
 - `frontend/src/stores/terminal.js`: 终端状态管理
+
+## 修复版本
+- 第一版：添加错误处理和延迟（未解决根本问题）
+- 第二版：检查容器可见性和尺寸（彻底解决问题）
