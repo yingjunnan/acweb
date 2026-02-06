@@ -29,4 +29,18 @@ api.interceptors.response.use(
   }
 )
 
+// Terminal API
+export const terminalApi = {
+  // 获取活跃会话列表
+  getSessions: () => {
+    const token = localStorage.getItem('token')
+    return api.get(`/api/v1/terminal/sessions?token=${token}`)
+  },
+  
+  // 检查会话状态
+  checkSessionStatus: (sessionId) => {
+    return api.get(`/api/v1/terminal/session/${sessionId}/status`)
+  }
+}
+
 export default api

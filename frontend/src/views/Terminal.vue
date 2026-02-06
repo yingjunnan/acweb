@@ -84,13 +84,19 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { ref, onMounted, onUnmounted, nextTick, watch, defineOptions } from 'vue'
 import { message } from 'ant-design-vue'
 import { PlusOutlined } from '@ant-design/icons-vue'
 import { useAuthStore } from '../stores/auth'
 import { useConfigStore } from '../stores/config'
 import { useTerminalStore } from '../stores/terminal'
+import { terminalApi } from '../api'
 import { Terminal } from 'xterm'
+
+// 定义组件名称，用于 keep-alive
+defineOptions({
+  name: 'Terminal'
+})
 import { FitAddon } from 'xterm-addon-fit'
 import { WebLinksAddon } from 'xterm-addon-web-links'
 import { WebglAddon } from 'xterm-addon-webgl'
@@ -490,75 +496,113 @@ watch(() => terminalStore.activeSession, async (newSessionId) => {
 onMounted(async () => {
   await configStore.loadConfig()
   
-  // 尝试恢复之前的会话
-  terminalStore.loadSessions()
+  // 检查是否有已存在的终端实例（keep-alive 缓存）
+  const hasExistingTerminals = Object.keys(terminalStore.terminals).length > 0
   
-  if (terminalStore.sessions.length === 0) {
-    // 没有保存的会话，创建默认终端
-    addSession('默认终端')
-  } else {
-    // 有保存的会话，尝试重连
-    message.info('正在恢复会话...')
+  if (hasExistingTerminals) {
+    // 有已存在的终端实例，无需重新创建
+    console.log('Terminal component activated from cache')
+    return
+  }
+  
+  // 首次加载，从后端获取活跃会话列表
+  try {
+    const response = await terminalApi.getSessions()
+    const activeSessions = response.data.sessions || []
     
-    await nextTick()
-    for (const session of terminalStore.sessions) {
-      const container = terminalStore.terminalRefs[session.id]
-      if (container && !terminalStore.terminals[session.id]) {
-        // 只有当终端不存在时才创建
-        const { term, fitAddon } = createTerminal(session.id)
-        term.open(container)
-        
-        setTimeout(() => {
-          try {
-            const rect = container.getBoundingClientRect()
-            if (rect.width > 0 && rect.height > 0) {
-              fitAddon.fit()
-            }
-          } catch (e) {
-            console.warn('Failed to fit terminal on mount:', e)
-          }
-        }, 100)
-
-        // 尝试重连到已存在的会话
-        const ws = connectWebSocket(session.id, session.name, true)
-
-        term.onData(data => {
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: 'input', data }))
-          }
-        })
-
-        term.onResize(({ cols, rows }) => {
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: 'resize', cols, rows }))
-          }
-        })
-
-        // ResizeObserver 只在容器可见时调用 fit
-        const resizeObserver = new ResizeObserver((entries) => {
-          for (const entry of entries) {
-            if (entry.contentRect.width > 0 && entry.contentRect.height > 0) {
-              try {
+    if (activeSessions.length > 0) {
+      // 有活跃会话，恢复它们
+      message.info('正在恢复会话...')
+      
+      // 更新 store 中的会话列表
+      terminalStore.sessions = activeSessions.map(s => ({
+        id: s.id,
+        name: s.name
+      }))
+      
+      // 设置活动会话
+      if (!terminalStore.activeSession || !activeSessions.find(s => s.id === terminalStore.activeSession)) {
+        terminalStore.activeSession = activeSessions[0].id
+      }
+      
+      terminalStore.saveSessions()
+      
+      await nextTick()
+      
+      // 为每个会话创建终端实例并重连
+      for (const session of activeSessions) {
+        const container = terminalStore.terminalRefs[session.id]
+        if (container && !terminalStore.terminals[session.id]) {
+          // 创建终端实例
+          const { term, fitAddon } = createTerminal(session.id)
+          term.open(container)
+          
+          setTimeout(() => {
+            try {
+              const rect = container.getBoundingClientRect()
+              if (rect.width > 0 && rect.height > 0) {
                 fitAddon.fit()
-              } catch (e) {
-                console.warn('Failed to fit terminal on resize:', e)
+              }
+            } catch (e) {
+              console.warn('Failed to fit terminal on mount:', e)
+            }
+          }, 100)
+
+          // 重连到已存在的会话
+          const ws = connectWebSocket(session.id, session.name, true)
+
+          term.onData(data => {
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ type: 'input', data }))
+            }
+          })
+
+          term.onResize(({ cols, rows }) => {
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ type: 'resize', cols, rows }))
+            }
+          })
+
+          // ResizeObserver 只在容器可见时调用 fit
+          const resizeObserver = new ResizeObserver((entries) => {
+            for (const entry of entries) {
+              if (entry.contentRect.width > 0 && entry.contentRect.height > 0) {
+                try {
+                  fitAddon.fit()
+                } catch (e) {
+                  console.warn('Failed to fit terminal on resize:', e)
+                }
               }
             }
+          })
+          resizeObserver.observe(container)
+          
+          // 保存 resizeObserver
+          if (!terminalStore.terminals[session.id].resizeObserver) {
+            terminalStore.terminals[session.id].resizeObserver = resizeObserver
           }
-        })
-        resizeObserver.observe(container)
-        
-        // 保存 resizeObserver
-        if (!terminalStore.terminals[session.id].resizeObserver) {
-          terminalStore.terminals[session.id].resizeObserver = resizeObserver
         }
       }
+      
+      message.success('会话恢复成功')
+    } else {
+      // 没有活跃会话，创建默认终端
+      addSession('默认终端')
     }
+  } catch (error) {
+    console.error('Failed to load sessions:', error)
+    message.error('加载会话失败，创建新会话')
+    
+    // 出错时创建默认终端
+    addSession('默认终端')
   }
 })
 
 onUnmounted(() => {
-  // 不关闭会话，保持连接
+  // 不关闭 WebSocket 连接，保持会话活跃
+  // 当用户切换菜单时，终端会话继续在后台运行
+  // 只清理 DOM 相关的资源，不清理网络连接
+  console.log('Terminal component unmounted, keeping sessions alive')
 })
 </script>
 
