@@ -9,9 +9,29 @@ const routes = [
   },
   {
     path: '/',
-    name: 'Terminal',
-    component: () => import('../views/Terminal.vue'),
-    meta: { requiresAuth: true }
+    component: () => import('../views/Layout.vue'),
+    meta: { requiresAuth: true },
+    children: [
+      {
+        path: '',
+        redirect: '/dashboard'
+      },
+      {
+        path: '/dashboard',
+        name: 'Dashboard',
+        component: () => import('../views/Dashboard.vue')
+      },
+      {
+        path: '/terminal',
+        name: 'Terminal',
+        component: () => import('../views/Terminal.vue')
+      },
+      {
+        path: '/settings',
+        name: 'Settings',
+        component: () => import('../views/Settings.vue')
+      }
+    ]
   }
 ]
 

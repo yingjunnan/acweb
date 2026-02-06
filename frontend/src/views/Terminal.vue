@@ -1,53 +1,43 @@
 <template>
-  <a-layout class="terminal-layout">
-    <a-layout-header class="header">
-      <div class="header-content">
-        <h2 class="title">Web Terminal</h2>
-        <a-space>
-          <a-button @click="addSession" type="primary">
-            <template #icon><PlusOutlined /></template>
-            新建会话
-          </a-button>
-          <a-button @click="handleLogout" danger>
-            <template #icon><LogoutOutlined /></template>
-            退出
-          </a-button>
-        </a-space>
-      </div>
-    </a-layout-header>
+  <div class="terminal-page">
+    <div class="terminal-header">
+      <h1 class="page-title">终端管理</h1>
+      <a-button @click="addSession" type="primary">
+        <template #icon><PlusOutlined /></template>
+        新建会话
+      </a-button>
+    </div>
 
-    <a-layout-content class="content">
-      <a-tabs
-        v-model:activeKey="activeSession"
-        type="editable-card"
-        @edit="onEdit"
-        class="terminal-tabs"
+    <a-tabs
+      v-model:activeKey="activeSession"
+      type="editable-card"
+      @edit="onEdit"
+      class="terminal-tabs"
+    >
+      <a-tab-pane
+        v-for="session in sessions"
+        :key="session.id"
+        :tab="session.name"
+        :closable="sessions.length > 1"
       >
-        <a-tab-pane
-          v-for="session in sessions"
-          :key="session.id"
-          :tab="session.name"
-          :closable="sessions.length > 1"
-        >
-          <div :ref="el => setTerminalRef(session.id, el)" class="terminal-container"></div>
-        </a-tab-pane>
-      </a-tabs>
-    </a-layout-content>
-  </a-layout>
+        <div :ref="el => setTerminalRef(session.id, el)" class="terminal-container"></div>
+      </a-tab-pane>
+    </a-tabs>
+  </div>
 </template>
 
 <script setup>
 import { ref, onMounted, onUnmounted, nextTick } from 'vue'
-import { useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
-import { PlusOutlined, LogoutOutlined } from '@ant-design/icons-vue'
+import { PlusOutlined } from '@ant-design/icons-vue'
 import { useAuthStore } from '../stores/auth'
+import { useConfigStore } from '../stores/config'
 import { Terminal } from 'xterm'
 import { FitAddon } from 'xterm-addon-fit'
 import 'xterm/css/xterm.css'
 
-const router = useRouter()
 const authStore = useAuthStore()
+const configStore = useConfigStore()
 
 const sessions = ref([])
 const activeSession = ref('')
@@ -64,11 +54,15 @@ const setTerminalRef = (id, el) => {
 }
 
 const createTerminal = (sessionId) => {
+  const config = configStore.config
   const term = new Terminal({
     cursorBlink: true,
-    fontSize: 14,
+    fontSize: config.font_size || 14,
     fontFamily: 'Menlo, Monaco, "Courier New", monospace',
-    theme: {
+    theme: config.theme === 'light' ? {
+      background: '#ffffff',
+      foreground: '#000000'
+    } : {
       background: '#1e1e1e',
       foreground: '#d4d4d4'
     },
@@ -84,7 +78,9 @@ const createTerminal = (sessionId) => {
 }
 
 const connectWebSocket = (sessionId) => {
-  const wsUrl = `ws://localhost:8000/api/v1/terminal/ws/${sessionId}?token=${authStore.token}`
+  const config = configStore.config
+  const cwd = config.default_path || '~'
+  const wsUrl = `ws://localhost:8000/api/v1/terminal/ws/${sessionId}?token=${authStore.token}&cwd=${encodeURIComponent(cwd)}`
   const ws = new WebSocket(wsUrl)
 
   ws.onopen = () => {
@@ -177,13 +173,8 @@ const onEdit = (targetKey, action) => {
   }
 }
 
-const handleLogout = () => {
-  Object.keys(websockets.value).forEach(removeSession)
-  authStore.logout()
-  router.push('/login')
-}
-
-onMounted(() => {
+onMounted(async () => {
+  await configStore.loadConfig()
   addSession()
 })
 
@@ -193,42 +184,38 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.terminal-layout {
-  height: 100vh;
-}
-
-.header {
-  background: #001529;
-  padding: 0 24px;
+.terminal-page {
+  height: 100%;
   display: flex;
-  align-items: center;
+  flex-direction: column;
 }
 
-.header-content {
-  width: 100%;
+.terminal-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  margin-bottom: 16px;
 }
 
-.title {
-  color: white;
+.page-title {
   margin: 0;
-  font-size: 20px;
-}
-
-.content {
-  padding: 16px;
-  background: #f0f2f5;
-  overflow: hidden;
+  font-size: 24px;
+  font-weight: 600;
 }
 
 .terminal-tabs {
-  height: 100%;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
 }
 
 .terminal-tabs :deep(.ant-tabs-content) {
-  height: calc(100vh - 120px);
+  flex: 1;
+  height: 0;
+}
+
+.terminal-tabs :deep(.ant-tabs-tabpane) {
+  height: 100%;
 }
 
 .terminal-container {
@@ -239,20 +226,12 @@ onUnmounted(() => {
 }
 
 @media (max-width: 768px) {
-  .header {
-    padding: 0 12px;
+  .page-title {
+    font-size: 18px;
   }
-
-  .title {
-    font-size: 16px;
-  }
-
-  .content {
-    padding: 8px;
-  }
-
-  .terminal-tabs :deep(.ant-tabs-content) {
-    height: calc(100vh - 110px);
+  
+  .terminal-header {
+    margin-bottom: 12px;
   }
 }
 </style>

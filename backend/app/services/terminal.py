@@ -15,12 +15,17 @@ class TerminalSession:
         self.child_pid = None
         self.running = False
         
-    def start(self, cols: int = 80, rows: int = 24):
+    def start(self, cols: int = 80, rows: int = 24, cwd: str = None):
         """启动终端会话"""
         self.child_pid, self.fd = pty.fork()
         
         if self.child_pid == 0:
             # 子进程
+            if cwd:
+                try:
+                    os.chdir(os.path.expanduser(cwd))
+                except:
+                    pass
             subprocess.run([os.environ.get('SHELL', '/bin/bash')])
         else:
             # 父进程
@@ -73,13 +78,13 @@ class TerminalManager:
     def __init__(self):
         self.sessions: Dict[str, TerminalSession] = {}
     
-    def create_session(self, session_id: str, cols: int = 80, rows: int = 24) -> TerminalSession:
+    def create_session(self, session_id: str, cols: int = 80, rows: int = 24, cwd: str = None) -> TerminalSession:
         """创建新的终端会话"""
         if session_id in self.sessions:
             self.sessions[session_id].close()
         
         session = TerminalSession(session_id)
-        session.start(cols, rows)
+        session.start(cols, rows, cwd)
         self.sessions[session_id] = session
         return session
     

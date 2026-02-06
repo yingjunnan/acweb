@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .core.config import settings
-from .api import auth, terminal
+from .api import auth, terminal, system, config
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -21,6 +21,8 @@ app.add_middleware(
 # 注册路由
 app.include_router(auth.router, prefix=f"{settings.API_V1_STR}/auth", tags=["auth"])
 app.include_router(terminal.router, prefix=f"{settings.API_V1_STR}/terminal", tags=["terminal"])
+app.include_router(system.router, prefix=f"{settings.API_V1_STR}/system", tags=["system"])
+app.include_router(config.router, prefix=f"{settings.API_V1_STR}/config", tags=["config"])
 
 @app.get("/")
 async def root():

@@ -7,7 +7,7 @@ import json
 router = APIRouter()
 
 @router.websocket("/ws/{session_id}")
-async def websocket_endpoint(websocket: WebSocket, session_id: str, token: str = Query(...)):
+async def websocket_endpoint(websocket: WebSocket, session_id: str, token: str = Query(...), cwd: str = Query(None)):
     """WebSocket 终端连接"""
     # 验证 token
     payload = decode_access_token(token)
@@ -18,7 +18,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, token: str =
     await websocket.accept()
     
     # 创建终端会话
-    session = terminal_manager.create_session(session_id)
+    session = terminal_manager.create_session(session_id, cwd=cwd)
     
     try:
         # 创建读取任务
