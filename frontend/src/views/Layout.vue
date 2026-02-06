@@ -131,6 +131,7 @@ onUnmounted(() => {
 
 .sider {
   position: relative;
+  box-shadow: 2px 0 8px rgba(0, 0, 0, 0.05);
 }
 
 .logo {
@@ -139,9 +140,35 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   color: white;
+  font-size: 20px;
+  font-weight: 700;
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.2) 0%, rgba(118, 75, 162, 0.2) 100%);
+  letter-spacing: 1px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+:deep(.ant-menu-dark) {
+  background: #001529;
+}
+
+:deep(.ant-menu-item) {
+  margin: 8px 8px;
+  width: calc(100% - 16px);
+  border-radius: 8px;
+  transition: all 0.3s ease;
+}
+
+:deep(.ant-menu-item-selected) {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+}
+
+:deep(.ant-menu-item:hover) {
+  background: rgba(102, 126, 234, 0.2) !important;
+}
+
+:deep(.ant-menu-item-icon) {
   font-size: 18px;
-  font-weight: bold;
-  background: rgba(255, 255, 255, 0.1);
 }
 
 .sider-footer {
@@ -150,6 +177,17 @@ onUnmounted(() => {
   width: 100%;
   padding: 16px;
   border-top: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(0, 0, 0, 0.2);
+}
+
+:deep(.sider-footer .ant-btn) {
+  color: rgba(255, 255, 255, 0.85);
+  transition: all 0.3s ease;
+}
+
+:deep(.sider-footer .ant-btn:hover) {
+  color: #ff4d4f;
+  background: rgba(255, 77, 79, 0.1);
 }
 
 .header {
@@ -158,17 +196,21 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  box-shadow: 0 1px 4px rgba(0, 21, 41, 0.08);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  z-index: 10;
 }
 
 .trigger {
-  font-size: 18px;
+  font-size: 20px;
   cursor: pointer;
-  transition: color 0.3s;
+  transition: all 0.3s ease;
+  padding: 8px;
+  border-radius: 8px;
 }
 
 .trigger:hover {
-  color: #1890ff;
+  color: #667eea;
+  background: rgba(102, 126, 234, 0.1);
 }
 
 .header-right {
@@ -178,15 +220,21 @@ onUnmounted(() => {
 }
 
 .username {
-  color: rgba(0, 0, 0, 0.65);
+  color: #262626;
+  font-weight: 500;
+  padding: 6px 16px;
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);
+  border-radius: 20px;
+  font-size: 14px;
 }
 
 .content {
-  margin: 16px;
+  margin: 20px;
   padding: 24px;
-  background: white;
-  min-height: calc(100vh - 112px);
+  background: #f5f7fa;
+  min-height: calc(100vh - 128px);
   overflow: auto;
+  border-radius: 12px;
 }
 
 @media (max-width: 768px) {
@@ -195,9 +243,14 @@ onUnmounted(() => {
   }
   
   .content {
-    margin: 8px;
+    margin: 12px;
     padding: 16px;
-    min-height: calc(100vh - 96px);
+    min-height: calc(100vh - 112px);
+  }
+  
+  .username {
+    padding: 4px 12px;
+    font-size: 13px;
   }
 }
 </style>

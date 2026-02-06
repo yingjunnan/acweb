@@ -45,26 +45,30 @@
         
         <!-- CPU -->
         <a-col :xs="24" :sm="12" :lg="6">
-          <a-card title="CPU" :bordered="false">
-            <a-progress
-              type="circle"
-              :percent="systemInfo.cpu?.percent || 0"
-              :width="120"
-              :stroke-color="getProgressColor(systemInfo.cpu?.percent || 0)"
-            />
+          <a-card title="CPU" :bordered="false" class="progress-card">
+            <div class="progress-wrapper">
+              <a-progress
+                type="circle"
+                :percent="systemInfo.cpu?.percent || 0"
+                :width="90"
+                :stroke-color="getProgressColor(systemInfo.cpu?.percent || 0)"
+              />
+            </div>
             <div class="stat-label">{{ systemInfo.cpu?.count || 0 }} 核心</div>
           </a-card>
         </a-col>
         
         <!-- 内存 -->
         <a-col :xs="24" :sm="12" :lg="6">
-          <a-card title="内存" :bordered="false">
-            <a-progress
-              type="circle"
-              :percent="systemInfo.memory?.percent || 0"
-              :width="120"
-              :stroke-color="getProgressColor(systemInfo.memory?.percent || 0)"
-            />
+          <a-card title="内存" :bordered="false" class="progress-card">
+            <div class="progress-wrapper">
+              <a-progress
+                type="circle"
+                :percent="systemInfo.memory?.percent || 0"
+                :width="90"
+                :stroke-color="getProgressColor(systemInfo.memory?.percent || 0)"
+              />
+            </div>
             <div class="stat-label">
               {{ formatBytes(systemInfo.memory?.used || 0) }} / 
               {{ formatBytes(systemInfo.memory?.total || 0) }}
@@ -241,12 +245,18 @@ onUnmounted(() => {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 2px solid #f0f0f0;
 }
 
 .page-title {
   margin: 0;
-  font-size: 24px;
+  font-size: 28px;
   font-weight: 600;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
 .refresh-info {
@@ -257,21 +267,64 @@ onUnmounted(() => {
 
 .last-update {
   color: rgba(0, 0, 0, 0.45);
-  font-size: 14px;
+  font-size: 13px;
+}
+
+:deep(.ant-card) {
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  transition: all 0.3s ease;
+}
+
+:deep(.ant-card:hover) {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  transform: translateY(-2px);
+}
+
+:deep(.ant-card-head) {
+  border-bottom: 1px solid #f0f0f0;
+  font-weight: 600;
+  color: #262626;
+}
+
+:deep(.ant-card-body) {
+  padding: 20px;
+}
+
+.progress-card :deep(.ant-card-body) {
+  padding: 30px 20px;
+  min-height: 200px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.progress-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px;
+  margin-bottom: 8px;
 }
 
 .stat-value {
-  font-size: 32px;
-  font-weight: bold;
-  color: #1890ff;
+  font-size: 36px;
+  font-weight: 700;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
   text-align: center;
   margin: 16px 0;
+  letter-spacing: -1px;
 }
 
 .stat-label {
   text-align: center;
   color: rgba(0, 0, 0, 0.45);
   margin-top: 8px;
+  font-size: 13px;
 }
 
 .stat-small {
@@ -280,14 +333,30 @@ onUnmounted(() => {
   font-size: 12px;
 }
 
+:deep(.ant-progress-circle) {
+  display: block;
+  margin: 0 auto;
+}
+
+:deep(.ant-descriptions-item-label) {
+  font-weight: 500;
+  color: rgba(0, 0, 0, 0.65);
+}
+
+:deep(.ant-descriptions-item-content) {
+  color: rgba(0, 0, 0, 0.85);
+  font-weight: 500;
+}
+
 .network-stat {
   text-align: center;
   padding: 16px 0;
 }
 
 .network-icon {
-  font-size: 32px;
-  margin-bottom: 8px;
+  font-size: 36px;
+  margin-bottom: 12px;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.1));
 }
 
 .network-icon.upload {
@@ -299,14 +368,25 @@ onUnmounted(() => {
 }
 
 .network-value {
-  font-size: 20px;
-  font-weight: bold;
+  font-size: 22px;
+  font-weight: 700;
   margin: 8px 0;
+  color: #262626;
 }
 
 .network-label {
   color: rgba(0, 0, 0, 0.45);
-  font-size: 14px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+:deep(.ant-progress-line) {
+  margin-bottom: 8px;
+}
+
+:deep(.ant-progress-text) {
+  font-weight: 600;
 }
 
 @media (max-width: 768px) {
@@ -317,7 +397,7 @@ onUnmounted(() => {
   }
   
   .page-title {
-    font-size: 20px;
+    font-size: 22px;
   }
   
   .refresh-info {
@@ -326,7 +406,24 @@ onUnmounted(() => {
   }
   
   .stat-value {
-    font-size: 24px;
+    font-size: 28px;
+  }
+  
+  .network-icon {
+    font-size: 28px;
+  }
+  
+  .network-value {
+    font-size: 18px;
+  }
+  
+  .progress-card :deep(.ant-card-body) {
+    padding: 24px 16px;
+    min-height: 180px;
+  }
+  
+  .progress-wrapper {
+    padding: 8px;
   }
 }
 </style>

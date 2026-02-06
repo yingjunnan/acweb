@@ -1,0 +1,7 @@
+{
+  "default_path": "~",
+  "shell": "/bin/zsh",
+  "font_size": 14,
+  "theme": "dark",
+  "refresh_interval": 5
+}

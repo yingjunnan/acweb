@@ -164,30 +164,167 @@ onMounted(() => {
 
 <style scoped>
 .settings {
-  max-width: 800px;
+  max-width: 900px;
 }
 
 .page-title {
   margin-bottom: 24px;
-  font-size: 24px;
+  font-size: 28px;
   font-weight: 600;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+:deep(.ant-card) {
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  transition: all 0.3s ease;
+}
+
+:deep(.ant-card:hover) {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+:deep(.ant-card-head) {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-bottom: none;
+  border-radius: 12px 12px 0 0;
+}
+
+:deep(.ant-card-head-title) {
+  color: white;
+  font-weight: 600;
+  font-size: 16px;
+}
+
+:deep(.ant-card-body) {
+  padding: 24px;
+}
+
+:deep(.ant-form-item-label > label) {
+  font-weight: 500;
+  color: #262626;
+}
+
+:deep(.ant-slider) {
+  margin: 8px 0 16px;
+}
+
+:deep(.ant-slider-mark-text) {
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.45);
+}
+
+:deep(.ant-slider-track) {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}
+
+:deep(.ant-slider-handle) {
+  border-color: #667eea;
+}
+
+:deep(.ant-slider-handle:hover),
+:deep(.ant-slider-handle:focus) {
+  border-color: #764ba2;
+  box-shadow: 0 0 0 5px rgba(102, 126, 234, 0.12);
+}
+
+:deep(.ant-input),
+:deep(.ant-select-selector) {
+  border-radius: 8px;
+  transition: all 0.3s ease;
+}
+
+:deep(.ant-input:hover),
+:deep(.ant-select-selector:hover) {
+  border-color: #667eea;
+}
+
+:deep(.ant-input:focus),
+:deep(.ant-select-focused .ant-select-selector) {
+  border-color: #667eea;
+  box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.1);
+}
+
+:deep(.ant-btn-primary) {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border: none;
+  border-radius: 8px;
+  font-weight: 500;
+  height: 40px;
+  padding: 0 24px;
+  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+  transition: all 0.3s ease;
+}
+
+:deep(.ant-btn-primary:hover) {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+}
+
+:deep(.ant-btn-default) {
+  border-radius: 8px;
+  height: 40px;
+  padding: 0 24px;
+  font-weight: 500;
+  transition: all 0.3s ease;
+}
+
+:deep(.ant-btn-default:hover) {
+  border-color: #667eea;
+  color: #667eea;
+}
+
+:deep(.ant-radio-button-wrapper-checked) {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-color: #667eea;
+}
+
+:deep(.ant-typography-title) {
+  color: #262626;
+  font-weight: 600;
+  margin-top: 16px !important;
+  margin-bottom: 8px !important;
+}
+
+:deep(.ant-alert) {
+  border-radius: 8px;
+  border: none;
+  background: #e6f7ff;
 }
 
 code {
-  background: #f5f5f5;
-  padding: 2px 6px;
-  border-radius: 3px;
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);
+  padding: 3px 8px;
+  border-radius: 4px;
   font-family: 'Courier New', monospace;
+  color: #667eea;
+  font-weight: 500;
+}
+
+ul {
+  padding-left: 20px;
+}
+
+li {
+  margin-bottom: 8px;
+  line-height: 1.8;
 }
 
 @media (max-width: 768px) {
   .page-title {
-    font-size: 20px;
+    font-size: 22px;
     margin-bottom: 16px;
   }
   
   :deep(.ant-form-item-label) {
     text-align: left;
+  }
+  
+  :deep(.ant-card-body) {
+    padding: 16px;
   }
 }
 </style>
