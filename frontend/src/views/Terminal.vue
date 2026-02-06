@@ -8,7 +8,30 @@
       </a-button>
     </div>
 
+    <!-- 空状态：没有终端时显示 -->
+    <div v-if="terminalStore.sessions.length === 0" class="empty-state">
+      <div class="empty-content">
+        <div class="empty-icon">
+          <svg viewBox="0 0 64 64" width="120" height="120">
+            <rect x="8" y="12" width="48" height="40" rx="2" fill="#667eea" opacity="0.1"/>
+            <rect x="8" y="12" width="48" height="8" rx="2" fill="#667eea" opacity="0.2"/>
+            <line x1="16" y1="28" x2="40" y2="28" stroke="#667eea" stroke-width="2" stroke-linecap="round"/>
+            <line x1="16" y1="36" x2="32" y2="36" stroke="#764ba2" stroke-width="2" stroke-linecap="round"/>
+            <circle cx="20" cy="44" r="1.5" fill="#667eea"/>
+          </svg>
+        </div>
+        <h2 class="empty-title">暂无终端会话</h2>
+        <p class="empty-description">创建一个新的终端会话开始工作</p>
+        <a-button @click="showNewSessionModal" type="primary" size="large" class="empty-button">
+          <template #icon><PlusOutlined /></template>
+          新建终端会话
+        </a-button>
+      </div>
+    </div>
+
+    <!-- 终端标签页 -->
     <a-tabs
+      v-else
       v-model:activeKey="terminalStore.activeSession"
       type="editable-card"
       @edit="onEdit"
@@ -18,7 +41,7 @@
         v-for="session in terminalStore.sessions"
         :key="session.id"
         :tab="session.name"
-        :closable="terminalStore.sessions.length > 1"
+        :closable="true"
         :force-render="true"
       >
         <div :ref="el => setTerminalRef(session.id, el)" class="terminal-container"></div>
@@ -651,6 +674,68 @@ onUnmounted(() => {
   overflow-y: auto !important;
 }
 
+/* 空状态样式 */
+.empty-state {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  padding: 40px;
+}
+
+.empty-content {
+  text-align: center;
+  max-width: 400px;
+}
+
+.empty-icon {
+  margin-bottom: 24px;
+  animation: float 3s ease-in-out infinite;
+}
+
+@keyframes float {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+.empty-title {
+  font-size: 24px;
+  font-weight: 600;
+  color: #333;
+  margin: 0 0 12px 0;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.empty-description {
+  font-size: 16px;
+  color: #666;
+  margin: 0 0 32px 0;
+  line-height: 1.6;
+}
+
+.empty-button {
+  height: 48px;
+  font-size: 16px;
+  padding: 0 32px;
+  border-radius: 24px;
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+}
+
+.empty-button:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(102, 126, 234, 0.4);
+}
+
 @media (max-width: 768px) {
   .page-title {
     font-size: 20px;
@@ -667,6 +752,24 @@ onUnmounted(() => {
   
   .terminal-container {
     padding: 8px;
+  }
+  
+  .empty-state {
+    padding: 20px;
+  }
+  
+  .empty-title {
+    font-size: 20px;
+  }
+  
+  .empty-description {
+    font-size: 14px;
+  }
+  
+  .empty-button {
+    height: 40px;
+    font-size: 14px;
+    padding: 0 24px;
   }
 }
 </style>
