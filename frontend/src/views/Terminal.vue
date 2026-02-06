@@ -2,54 +2,87 @@
   <div class="terminal-page">
     <div class="terminal-header">
       <h1 class="page-title">终端管理</h1>
-      <a-button @click="addSession" type="primary">
+      <a-button @click="showNewSessionModal" type="primary">
         <template #icon><PlusOutlined /></template>
         新建会话
       </a-button>
     </div>
 
     <a-tabs
-      v-model:activeKey="activeSession"
+      v-model:activeKey="terminalStore.activeSession"
       type="editable-card"
       @edit="onEdit"
       class="terminal-tabs"
     >
       <a-tab-pane
-        v-for="session in sessions"
+        v-for="session in terminalStore.sessions"
         :key="session.id"
         :tab="session.name"
-        :closable="sessions.length > 1"
+        :closable="terminalStore.sessions.length > 1"
       >
         <div :ref="el => setTerminalRef(session.id, el)" class="terminal-container"></div>
       </a-tab-pane>
     </a-tabs>
+    
+    <!-- 新建会话对话框 -->
+    <a-modal
+      v-model:open="modalVisible"
+      title="新建终端会话"
+      @ok="handleCreateSession"
+      @cancel="handleCancelModal"
+      okText="创建"
+      cancelText="取消"
+      :okButtonProps="{ disabled: !newSessionName.trim() }"
+    >
+      <a-form :label-col="{ span: 6 }" :wrapper-col="{ span: 18 }">
+        <a-form-item 
+          label="会话名称"
+          :validate-status="validateStatus"
+          :help="validateMessage"
+        >
+          <a-input
+            v-model:value="newSessionName"
+            placeholder="例如: 开发环境、生产服务器"
+            @pressEnter="handleCreateSession"
+            @input="checkDuplicateName"
+          />
+        </a-form-item>
+      </a-form>
+      <a-alert
+        message="提示"
+        description="会话名称不能重复，建议使用有意义的名称方便识别"
+        type="info"
+        show-icon
+        style="margin-top: 16px"
+      />
+    </a-modal>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { message } from 'ant-design-vue'
 import { PlusOutlined } from '@ant-design/icons-vue'
 import { useAuthStore } from '../stores/auth'
 import { useConfigStore } from '../stores/config'
+import { useTerminalStore } from '../stores/terminal'
 import { Terminal } from 'xterm'
 import { FitAddon } from 'xterm-addon-fit'
 import 'xterm/css/xterm.css'
 
 const authStore = useAuthStore()
 const configStore = useConfigStore()
+const terminalStore = useTerminalStore()
 
-const sessions = ref([])
-const activeSession = ref('')
-const terminalRefs = ref({})
-const terminals = ref({})
-const websockets = ref({})
-
+const modalVisible = ref(false)
+const newSessionName = ref('')
+const validateStatus = ref('')
+const validateMessage = ref('')
 let sessionCounter = 0
 
 const setTerminalRef = (id, el) => {
   if (el) {
-    terminalRefs.value[id] = el
+    terminalStore.terminalRefs[id] = el
   }
 }
 
@@ -73,7 +106,7 @@ const createTerminal = (sessionId) => {
   const fitAddon = new FitAddon()
   term.loadAddon(fitAddon)
 
-  terminals.value[sessionId] = { term, fitAddon }
+  terminalStore.terminals[sessionId] = { term, fitAddon }
   return { term, fitAddon }
 }
 
@@ -82,44 +115,103 @@ const connectWebSocket = (sessionId) => {
   const cwd = config.default_path || '~'
   const wsUrl = `ws://localhost:8000/api/v1/terminal/ws/${sessionId}?token=${authStore.token}&cwd=${encodeURIComponent(cwd)}`
   const ws = new WebSocket(wsUrl)
+  
+  // 找到会话名称
+  const session = terminalStore.sessions.find(s => s.id === sessionId)
+  const sessionName = session ? session.name : '终端'
 
   ws.onopen = () => {
-    message.success('终端连接成功')
+    message.success(`${sessionName} 连接成功`)
   }
 
   ws.onmessage = (event) => {
     const data = JSON.parse(event.data)
     if (data.type === 'output') {
-      terminals.value[sessionId]?.term.write(data.data)
+      terminalStore.terminals[sessionId]?.term.write(data.data)
     }
   }
 
   ws.onerror = () => {
-    message.error('终端连接错误')
+    message.error(`${sessionName} 连接错误`)
   }
 
   ws.onclose = () => {
-    message.info('终端连接已关闭')
+    message.info(`${sessionName} 连接已关闭`)
   }
 
-  websockets.value[sessionId] = ws
+  terminalStore.websockets[sessionId] = ws
   return ws
 }
 
-const addSession = async () => {
+const showNewSessionModal = () => {
+  newSessionName.value = `终端 ${sessionCounter + 1}`
+  validateStatus.value = ''
+  validateMessage.value = ''
+  modalVisible.value = true
+}
+
+const handleCancelModal = () => {
+  modalVisible.value = false
+  newSessionName.value = ''
+  validateStatus.value = ''
+  validateMessage.value = ''
+}
+
+const checkDuplicateName = () => {
+  const name = newSessionName.value.trim()
+  
+  if (!name) {
+    validateStatus.value = 'error'
+    validateMessage.value = '会话名称不能为空'
+    return false
+  }
+  
+  const isDuplicate = terminalStore.sessions.some(s => s.name === name)
+  if (isDuplicate) {
+    validateStatus.value = 'error'
+    validateMessage.value = '该名称已存在，请使用其他名称'
+    return false
+  }
+  
+  validateStatus.value = 'success'
+  validateMessage.value = ''
+  return true
+}
+
+const handleCreateSession = () => {
+  const name = newSessionName.value.trim()
+  
+  if (!name) {
+    message.warning('请输入会话名称')
+    return
+  }
+  
+  // 检查名称是否重复
+  if (!checkDuplicateName()) {
+    return
+  }
+  
+  addSession(name)
+  modalVisible.value = false
+  newSessionName.value = ''
+  validateStatus.value = ''
+  validateMessage.value = ''
+}
+
+const addSession = async (name) => {
   sessionCounter++
   const sessionId = `session-${Date.now()}-${sessionCounter}`
   const session = {
     id: sessionId,
-    name: `终端 ${sessionCounter}`
+    name: name || `终端 ${sessionCounter}`
   }
 
-  sessions.value.push(session)
-  activeSession.value = sessionId
+  terminalStore.sessions.push(session)
+  terminalStore.activeSession = sessionId
 
   await nextTick()
 
-  const container = terminalRefs.value[sessionId]
+  const container = terminalStore.terminalRefs[sessionId]
   if (container) {
     const { term, fitAddon } = createTerminal(sessionId)
     term.open(container)
@@ -143,28 +235,38 @@ const addSession = async () => {
       fitAddon.fit()
     })
     resizeObserver.observe(container)
+    
+    // 显示创建成功消息
+    message.success(`终端 "${session.name}" 创建成功`)
   }
 }
 
 const removeSession = (sessionId) => {
-  const ws = websockets.value[sessionId]
+  // 找到要删除的会话
+  const session = terminalStore.sessions.find(s => s.id === sessionId)
+  const sessionName = session ? session.name : '未知终端'
+  
+  const ws = terminalStore.websockets[sessionId]
   if (ws) {
     ws.send(JSON.stringify({ type: 'close' }))
     ws.close()
-    delete websockets.value[sessionId]
+    delete terminalStore.websockets[sessionId]
   }
 
-  const terminal = terminals.value[sessionId]
+  const terminal = terminalStore.terminals[sessionId]
   if (terminal) {
     terminal.term.dispose()
-    delete terminals.value[sessionId]
+    delete terminalStore.terminals[sessionId]
   }
 
-  sessions.value = sessions.value.filter(s => s.id !== sessionId)
+  terminalStore.sessions = terminalStore.sessions.filter(s => s.id !== sessionId)
 
-  if (sessions.value.length > 0 && activeSession.value === sessionId) {
-    activeSession.value = sessions.value[0].id
+  if (terminalStore.sessions.length > 0 && terminalStore.activeSession === sessionId) {
+    terminalStore.activeSession = terminalStore.sessions[0].id
   }
+  
+  // 显示关闭成功消息
+  message.info(`终端 "${sessionName}" 已关闭`)
 }
 
 const onEdit = (targetKey, action) => {
@@ -173,13 +275,39 @@ const onEdit = (targetKey, action) => {
   }
 }
 
+// 监听路由变化，重新渲染终端
+watch(() => terminalStore.activeSession, async (newSessionId) => {
+  if (newSessionId) {
+    await nextTick()
+    const terminal = terminalStore.terminals[newSessionId]
+    if (terminal) {
+      terminal.fitAddon.fit()
+    }
+  }
+})
+
 onMounted(async () => {
   await configStore.loadConfig()
-  addSession()
+  
+  // 如果没有会话，创建默认终端
+  if (terminalStore.sessions.length === 0) {
+    addSession('默认终端')
+  } else {
+    // 恢复已有会话的终端显示
+    await nextTick()
+    for (const session of terminalStore.sessions) {
+      const container = terminalStore.terminalRefs[session.id]
+      const terminal = terminalStore.terminals[session.id]
+      if (container && terminal) {
+        terminal.term.open(container)
+        terminal.fitAddon.fit()
+      }
+    }
+  }
 })
 
 onUnmounted(() => {
-  Object.keys(websockets.value).forEach(removeSession)
+  // 不关闭会话，保持连接
 })
 </script>
 
@@ -188,6 +316,7 @@ onUnmounted(() => {
   height: 100%;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .terminal-header {
@@ -197,6 +326,7 @@ onUnmounted(() => {
   margin-bottom: 16px;
   padding-bottom: 16px;
   border-bottom: 2px solid #f0f0f0;
+  flex-shrink: 0;
 }
 
 .page-title {
@@ -232,10 +362,19 @@ onUnmounted(() => {
   border-radius: 12px;
   padding: 16px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  overflow: hidden;
+  min-height: 0;
+}
+
+:deep(.ant-tabs) {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
 }
 
 :deep(.ant-tabs-nav) {
   margin-bottom: 16px;
+  flex-shrink: 0;
 }
 
 :deep(.ant-tabs-tab) {
@@ -251,9 +390,14 @@ onUnmounted(() => {
   color: #667eea;
 }
 
-:deep(.ant-tabs-content) {
+:deep(.ant-tabs-content-holder) {
   flex: 1;
-  height: 0;
+  overflow: hidden;
+  min-height: 0;
+}
+
+:deep(.ant-tabs-content) {
+  height: 100%;
 }
 
 :deep(.ant-tabs-tabpane) {
@@ -262,10 +406,21 @@ onUnmounted(() => {
 
 .terminal-container {
   height: 100%;
+  width: 100%;
   background: #1e1e1e;
   padding: 12px;
   border-radius: 8px;
   box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+}
+
+:deep(.xterm) {
+  height: 100% !important;
+  padding: 0;
+}
+
+:deep(.xterm-viewport) {
+  overflow-y: auto !important;
 }
 
 @media (max-width: 768px) {

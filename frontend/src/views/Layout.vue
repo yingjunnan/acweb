@@ -85,10 +85,12 @@ import {
   LogoutOutlined
 } from '@ant-design/icons-vue'
 import { useAuthStore } from '../stores/auth'
+import { useTerminalStore } from '../stores/terminal'
 
 const router = useRouter()
 const route = useRoute()
 const authStore = useAuthStore()
+const terminalStore = useTerminalStore()
 
 const collapsed = ref(false)
 const selectedKeys = ref([route.path])
@@ -102,6 +104,26 @@ const handleMenuClick = ({ key }) => {
 }
 
 const handleLogout = () => {
+  // 关闭所有终端会话
+  Object.keys(terminalStore.websockets).forEach(sessionId => {
+    const ws = terminalStore.websockets[sessionId]
+    if (ws) {
+      ws.send(JSON.stringify({ type: 'close' }))
+      ws.close()
+    }
+    const terminal = terminalStore.terminals[sessionId]
+    if (terminal) {
+      terminal.term.dispose()
+    }
+  })
+  
+  // 清空终端状态
+  terminalStore.sessions = []
+  terminalStore.activeSession = ''
+  terminalStore.terminalRefs = {}
+  terminalStore.terminals = {}
+  terminalStore.websockets = {}
+  
   authStore.logout()
   router.push('/login')
 }
@@ -233,8 +255,11 @@ onUnmounted(() => {
   padding: 24px;
   background: #f5f7fa;
   min-height: calc(100vh - 128px);
+  height: calc(100vh - 128px);
   overflow: auto;
   border-radius: 12px;
+  display: flex;
+  flex-direction: column;
 }
 
 @media (max-width: 768px) {
@@ -246,6 +271,7 @@ onUnmounted(() => {
     margin: 12px;
     padding: 16px;
     min-height: calc(100vh - 112px);
+    height: calc(100vh - 112px);
   }
   
   .username {
