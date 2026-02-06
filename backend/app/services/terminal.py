@@ -5,6 +5,7 @@ import subprocess
 import struct
 import fcntl
 import termios
+import signal
 from typing import Dict, Optional
 import asyncio
 import time
@@ -41,18 +42,62 @@ class TerminalSession:
                 except:
                     pass
             
-            # 设置终端环境变量
+            # 设置终端环境变量 - 增强对交互式 CLI 工具的支持
             os.environ['TERM'] = 'xterm-256color'
             os.environ['COLORTERM'] = 'truecolor'
             os.environ['LANG'] = 'en_US.UTF-8'
             os.environ['LC_ALL'] = 'en_US.UTF-8'
+            # 确保支持完整的终端功能
+            os.environ['TERM_PROGRAM'] = 'xterm'
+            os.environ['TERM_PROGRAM_VERSION'] = '1.0'
             
             subprocess.run([os.environ.get('SHELL', '/bin/bash')])
         else:
             # 父进程
+            # 先设置窗口大小
             self.set_winsize(rows, cols)
+            
+            # 配置终端属性以支持交互式应用
+            try:
+                # 获取当前终端属性
+                attrs = termios.tcgetattr(self.fd)
+                
+                # 设置输入模式 (iflag)
+                # ICRNL: 将输入的 CR 转换为 NL
+                # IXON: 启用 XON/XOFF 流控制
+                attrs[0] = termios.ICRNL | termios.IXON
+                
+                # 设置输出模式 (oflag)
+                # OPOST: 启用输出处理
+                # ONLCR: 将输出的 NL 转换为 CR-NL
+                attrs[1] = termios.OPOST | termios.ONLCR
+                
+                # 设置控制模式 (cflag)
+                # CS8: 8位字符
+                # CREAD: 启用接收
+                attrs[2] = termios.CS8 | termios.CREAD
+                
+                # 设置本地模式 (lflag)
+                # ISIG: 启用信号
+                # ICANON: 启用规范模式
+                # ECHO: 回显输入字符
+                # ECHOE: 回显擦除字符
+                # ECHOK: 回显 KILL 字符
+                # ECHOCTL: 回显控制字符
+                # ECHOKE: 回显 KILL 字符并擦除行
+                # IEXTEN: 启用扩展处理
+                attrs[3] = (termios.ISIG | termios.ICANON | termios.ECHO | 
+                           termios.ECHOE | termios.ECHOK | termios.ECHOCTL | 
+                           termios.ECHOKE | termios.IEXTEN)
+                
+                # 应用终端属性
+                termios.tcsetattr(self.fd, termios.TCSANOW, attrs)
+            except Exception as e:
+                print(f"Warning: Could not set terminal attributes: {e}")
+            
             self.running = True
             self.last_activity = time.time()
+            
             # 设置非阻塞
             flag = fcntl.fcntl(self.fd, fcntl.F_GETFL)
             fcntl.fcntl(self.fd, fcntl.F_SETFL, flag | os.O_NONBLOCK)
@@ -67,6 +112,16 @@ class TerminalSession:
             self.cols = cols
             winsize = struct.pack("HHHH", rows, cols, 0, 0)
             fcntl.ioctl(self.fd, termios.TIOCSWINSZ, winsize)
+            
+            # 发送 SIGWINCH 信号通知子进程窗口大小改变
+            # 这对于交互式 CLI 工具（如 vim, less, 菜单界面等）非常重要
+            if self.child_pid:
+                try:
+                    import signal
+                    os.kill(self.child_pid, signal.SIGWINCH)
+                except Exception as e:
+                    print(f"Warning: Could not send SIGWINCH: {e}")
+            
             # 更新数据库中的尺寸
             self._update_winsize_in_db()
     

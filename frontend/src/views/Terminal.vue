@@ -44,6 +44,42 @@
         :closable="true"
         :force-render="true"
       >
+        <!-- 终端信息栏 -->
+        <div class="terminal-info-bar" v-if="getSessionInfo(session.id)">
+          <div class="info-left">
+            <a-tag color="blue">
+              <template #icon><ClockCircleOutlined /></template>
+              {{ formatDate(getSessionInfo(session.id).created_at) }}
+            </a-tag>
+            <a-tag color="green">
+              <template #icon><ColumnWidthOutlined /></template>
+              {{ getSessionInfo(session.id).cols }} × {{ getSessionInfo(session.id).rows }}
+            </a-tag>
+            <a-tag color="purple">
+              <template #icon><DatabaseOutlined /></template>
+              {{ formatBufferSize(getSessionInfo(session.id).buffer_size) }}
+            </a-tag>
+          </div>
+          <div class="info-right">
+            <a-button 
+              size="small" 
+              type="primary" 
+              @click="adaptTerminalSize(session.id)"
+              v-if="needsResize(session.id)"
+            >
+              <template #icon><SyncOutlined /></template>
+              适配尺寸
+            </a-button>
+            <a-button 
+              size="small" 
+              @click="showSessionDetails(session.id)"
+            >
+              <template #icon><InfoCircleOutlined /></template>
+              详情
+            </a-button>
+          </div>
+        </div>
+        
         <div :ref="el => setTerminalRef(session.id, el)" class="terminal-container"></div>
       </a-tab-pane>
     </a-tabs>
@@ -80,13 +116,75 @@
         style="margin-top: 16px"
       />
     </a-modal>
+    
+    <!-- 会话详情对话框 -->
+    <a-modal
+      v-model:open="detailsModalVisible"
+      title="会话详情"
+      :footer="null"
+      width="600px"
+    >
+      <div v-if="selectedSessionDetails" class="session-details">
+        <a-descriptions bordered :column="1">
+          <a-descriptions-item label="会话名称">
+            {{ selectedSessionDetails.name }}
+          </a-descriptions-item>
+          <a-descriptions-item label="会话 ID">
+            <a-typography-text copyable>{{ selectedSessionDetails.id }}</a-typography-text>
+          </a-descriptions-item>
+          <a-descriptions-item label="创建时间">
+            {{ formatDateTime(selectedSessionDetails.created_at) }}
+          </a-descriptions-item>
+          <a-descriptions-item label="最后活动">
+            {{ formatDateTime(selectedSessionDetails.last_activity) }}
+          </a-descriptions-item>
+          <a-descriptions-item label="终端尺寸">
+            <a-tag color="green">{{ selectedSessionDetails.cols }} 列 × {{ selectedSessionDetails.rows }} 行</a-tag>
+          </a-descriptions-item>
+          <a-descriptions-item label="当前尺寸">
+            <a-tag color="blue">{{ getCurrentTerminalSize(selectedSessionDetails.id) }}</a-tag>
+          </a-descriptions-item>
+          <a-descriptions-item label="缓存大小">
+            {{ formatBufferSize(selectedSessionDetails.buffer_size) }}
+          </a-descriptions-item>
+          <a-descriptions-item label="工作目录">
+            {{ selectedSessionDetails.cwd || '~' }}
+          </a-descriptions-item>
+          <a-descriptions-item label="进程 ID">
+            {{ selectedSessionDetails.pid || 'N/A' }}
+          </a-descriptions-item>
+          <a-descriptions-item label="运行状态">
+            <a-badge :status="selectedSessionDetails.running ? 'processing' : 'default'" 
+                     :text="selectedSessionDetails.running ? '运行中' : '已停止'" />
+          </a-descriptions-item>
+        </a-descriptions>
+        
+        <div style="margin-top: 16px; text-align: right;">
+          <a-button 
+            type="primary" 
+            @click="adaptTerminalSize(selectedSessionDetails.id)"
+            v-if="needsResize(selectedSessionDetails.id)"
+          >
+            <template #icon><SyncOutlined /></template>
+            适配到保存的尺寸
+          </a-button>
+        </div>
+      </div>
+    </a-modal>
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted, onUnmounted, nextTick, watch, defineOptions } from 'vue'
 import { message } from 'ant-design-vue'
-import { PlusOutlined } from '@ant-design/icons-vue'
+import { 
+  PlusOutlined, 
+  ClockCircleOutlined, 
+  ColumnWidthOutlined, 
+  DatabaseOutlined,
+  SyncOutlined,
+  InfoCircleOutlined
+} from '@ant-design/icons-vue'
 import { useAuthStore } from '../stores/auth'
 import { useConfigStore } from '../stores/config'
 import { useTerminalStore } from '../stores/terminal'
@@ -100,6 +198,7 @@ defineOptions({
 import { FitAddon } from 'xterm-addon-fit'
 import { WebLinksAddon } from 'xterm-addon-web-links'
 import { WebglAddon } from 'xterm-addon-webgl'
+import { Unicode11Addon } from '@xterm/addon-unicode11'
 import 'xterm/css/xterm.css'
 
 const authStore = useAuthStore()
@@ -110,6 +209,9 @@ const modalVisible = ref(false)
 const newSessionName = ref('')
 const validateStatus = ref('')
 const validateMessage = ref('')
+const detailsModalVisible = ref(false)
+const selectedSessionDetails = ref(null)
+const sessionInfoMap = ref({}) // 存储会话详细信息
 let sessionCounter = 0
 
 const setTerminalRef = (id, el) => {
@@ -127,7 +229,7 @@ const createTerminal = (sessionId) => {
     fontFamily: 'Menlo, Monaco, "Courier New", monospace',
     fontWeight: 'normal',
     fontWeightBold: 'bold',
-    lineHeight: 1.2,
+    lineHeight: 1.0,
     letterSpacing: 0,
     theme: config.theme === 'light' ? {
       background: '#ffffff',
@@ -170,14 +272,49 @@ const createTerminal = (sessionId) => {
     rightClickSelectsWord: true,
     fastScrollModifier: 'shift',
     fastScrollSensitivity: 5,
-    scrollSensitivity: 1
+    scrollSensitivity: 1,
+    windowOptions: {
+      setWinLines: true,
+      setWinSizePixels: false,
+      getWinSizePixels: false,
+      getCellSizePixels: false,
+      getIconTitle: false,
+      getWinTitle: false,
+      pushTitle: false,
+      popTitle: false,
+      setWinPosition: false,
+      getWinPosition: false,
+      getWinState: false,
+      raiseWin: false,
+      lowerWin: false,
+      refreshWin: false,
+      restoreWin: false,
+      maximizeWin: false,
+      minimizeWin: false,
+      fullscreenWin: false
+    },
+    altClickMovesCursor: true,
+    cursorInactiveStyle: 'outline',
+    smoothScrollDuration: 0,
+    cursorWidth: 1,
+    screenReaderMode: false,
+    tabStopWidth: 8,
+    // 关键修复：启用 Unicode 11 支持以正确渲染 box-drawing 字符
+    allowProposedApi: true,
+    // 日志级别设置为 off 以避免控制台警告
+    logLevel: 'off'
   })
 
   const fitAddon = new FitAddon()
   const webLinksAddon = new WebLinksAddon()
+  const unicode11Addon = new Unicode11Addon()
   
   term.loadAddon(fitAddon)
   term.loadAddon(webLinksAddon)
+  term.loadAddon(unicode11Addon)
+  
+  // 激活 Unicode 11 支持以正确渲染 box-drawing 和其他 Unicode 字符
+  term.unicode.activeVersion = '11'
   
   // 尝试加载 WebGL 渲染器以提高性能
   let webglAddon = null
@@ -196,6 +333,7 @@ const createTerminal = (sessionId) => {
     term, 
     fitAddon, 
     webLinksAddon,
+    unicode11Addon,
     webglAddon 
   }
   return { term, fitAddon }
@@ -410,6 +548,15 @@ const removeSession = (sessionId) => {
       }
       
       // 3. 清理其他 addons
+      if (terminal.unicode11Addon) {
+        try {
+          terminal.unicode11Addon.dispose()
+        } catch (e) {
+          // 忽略错误
+        }
+        delete terminal.unicode11Addon
+      }
+      
       if (terminal.webLinksAddon) {
         try {
           terminal.webLinksAddon.dispose()
@@ -469,6 +616,116 @@ const onEdit = (targetKey, action) => {
   }
 }
 
+// 获取会话信息
+const getSessionInfo = (sessionId) => {
+  return sessionInfoMap.value[sessionId]
+}
+
+// 格式化日期
+const formatDate = (timestamp) => {
+  if (!timestamp) return 'N/A'
+  const date = new Date(timestamp * 1000)
+  const now = new Date()
+  const diff = now - date
+  
+  if (diff < 60000) return '刚刚'
+  if (diff < 3600000) return `${Math.floor(diff / 60000)} 分钟前`
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)} 小时前`
+  
+  return date.toLocaleDateString('zh-CN')
+}
+
+// 格式化完整日期时间
+const formatDateTime = (timestamp) => {
+  if (!timestamp) return 'N/A'
+  const date = new Date(timestamp * 1000)
+  return date.toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  })
+}
+
+// 格式化缓存大小
+const formatBufferSize = (size) => {
+  if (!size) return '0 KB'
+  if (size < 1024) return `${size} B`
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
+  return `${(size / 1024 / 1024).toFixed(1)} MB`
+}
+
+// 获取当前终端尺寸
+const getCurrentTerminalSize = (sessionId) => {
+  const terminal = terminalStore.terminals[sessionId]
+  if (terminal && terminal.term) {
+    return `${terminal.term.cols} 列 × ${terminal.term.rows} 行`
+  }
+  return 'N/A'
+}
+
+// 检查是否需要调整尺寸
+const needsResize = (sessionId) => {
+  const info = sessionInfoMap.value[sessionId]
+  const terminal = terminalStore.terminals[sessionId]
+  
+  if (!info || !terminal || !terminal.term) return false
+  
+  // 如果当前尺寸与保存的尺寸不同，显示适配按钮
+  return terminal.term.cols !== info.cols || terminal.term.rows !== info.rows
+}
+
+// 适配终端尺寸
+const adaptTerminalSize = (sessionId) => {
+  const info = sessionInfoMap.value[sessionId]
+  const terminal = terminalStore.terminals[sessionId]
+  
+  if (!info || !terminal || !terminal.term) {
+    message.error('无法适配尺寸')
+    return
+  }
+  
+  try {
+    // 调整终端尺寸到保存的值
+    terminal.term.resize(info.cols, info.rows)
+    
+    // 发送 resize 消息到后端
+    const ws = terminalStore.websockets[sessionId]
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ 
+        type: 'resize', 
+        cols: info.cols, 
+        rows: info.rows 
+      }))
+    }
+    
+    // 调整容器大小
+    setTimeout(() => {
+      try {
+        terminal.fitAddon.fit()
+      } catch (e) {
+        console.warn('Failed to fit after resize:', e)
+      }
+    }, 100)
+    
+    message.success('尺寸已适配')
+  } catch (error) {
+    console.error('Failed to adapt terminal size:', error)
+    message.error('适配尺寸失败')
+  }
+}
+
+// 显示会话详情
+const showSessionDetails = (sessionId) => {
+  const info = sessionInfoMap.value[sessionId]
+  if (info) {
+    selectedSessionDetails.value = { ...info }
+    detailsModalVisible.value = true
+  }
+}
+
 // 监听活动会话变化，调整终端尺寸
 watch(() => terminalStore.activeSession, async (newSessionId) => {
   if (newSessionId && terminalStore.terminals[newSessionId]) {
@@ -520,6 +777,22 @@ onMounted(async () => {
         id: s.id,
         name: s.name
       }))
+      
+      // 保存会话详细信息
+      activeSessions.forEach(s => {
+        sessionInfoMap.value[s.id] = {
+          id: s.id,
+          name: s.name,
+          rows: s.rows || 24,
+          cols: s.cols || 80,
+          created_at: s.created_at,
+          last_activity: s.last_activity,
+          running: s.running,
+          cwd: s.cwd,
+          pid: s.pid,
+          buffer_size: 0 // 将在重连后更新
+        }
+      })
       
       // 设置活动会话
       if (!terminalStore.activeSession || !activeSessions.find(s => s.id === terminalStore.activeSession)) {
@@ -721,16 +994,61 @@ onUnmounted(() => {
 
 :deep(.ant-tabs-tabpane) {
   height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.terminal-info-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.05) 0%, rgba(118, 75, 162, 0.05) 100%);
+  border-radius: 8px 8px 0 0;
+  border-bottom: 1px solid #e8e8e8;
+  flex-shrink: 0;
+}
+
+.info-left {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.info-right {
+  display: flex;
+  gap: 8px;
+}
+
+:deep(.terminal-info-bar .ant-tag) {
+  margin: 0;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+:deep(.terminal-info-bar .ant-btn) {
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.session-details {
+  padding: 8px 0;
+}
+
+:deep(.session-details .ant-descriptions-item-label) {
+  font-weight: 500;
+  background: #fafafa;
 }
 
 .terminal-container {
-  height: 100%;
+  flex: 1;
   width: 100%;
   background: #1e1e1e;
   padding: 12px;
-  border-radius: 8px;
+  border-radius: 0 0 8px 8px;
   box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.3);
   overflow: hidden;
+  min-height: 0;
 }
 
 :deep(.xterm) {
