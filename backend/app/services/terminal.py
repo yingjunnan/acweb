@@ -209,7 +209,6 @@ class TerminalSession:
         with self.lock:
             self.connected_clients.pop(client_id, None)
             print(f"Client {client_id} disconnected from session {self.session_id}. Remaining clients: {len(self.connected_clients)}")
-        print(f"Client {client_id} disconnected from session {self.session_id}. Remaining clients: {len(self.connected_clients)}")
     
     def has_clients(self) -> bool:
         """检查是否有客户端连接"""

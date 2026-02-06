@@ -753,15 +753,6 @@ const formatBufferSize = (size) => {
   return `${(size / 1024 / 1024).toFixed(1)} MB`
 }
 
-// 获取当前终端尺寸
-const getCurrentTerminalSize = (sessionId) => {
-  const terminal = terminalStore.terminals[sessionId]
-  if (terminal && terminal.term) {
-    return `${terminal.term.cols} 列 × ${terminal.term.rows} 行`
-  }
-  return 'N/A'
-}
-
 // 全屏切换
 const showSessionDetails = (sessionId) => {
   const info = sessionInfoMap.value[sessionId]

@@ -5,5 +5,5 @@
   "theme": "dark",
   "refresh_interval": 5,
   "session_timeout": 3600,
-  "buffer_size": 1000
+  "buffer_size": 2500
 }
