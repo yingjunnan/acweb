@@ -14,3 +14,5 @@ class TerminalSessionDB(Base):
     is_active = Column(Boolean, default=True)
     pid = Column(Integer, nullable=True)
     cwd = Column(String, nullable=True)
+    rows = Column(Integer, default=24)  # 终端行数
+    cols = Column(Integer, default=80)  # 终端列数

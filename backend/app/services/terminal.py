@@ -25,6 +25,8 @@ class TerminalSession:
         self.max_buffer_size = buffer_size
         self.db = db
         self.cwd = None
+        self.rows = 24  # 默认行数
+        self.cols = 80  # 默认列数
         
     def start(self, cols: int = 80, rows: int = 24, cwd: str = None):
         """启动终端会话"""
@@ -61,8 +63,12 @@ class TerminalSession:
     def set_winsize(self, rows: int, cols: int):
         """设置终端窗口大小"""
         if self.fd:
+            self.rows = rows
+            self.cols = cols
             winsize = struct.pack("HHHH", rows, cols, 0, 0)
             fcntl.ioctl(self.fd, termios.TIOCSWINSZ, winsize)
+            # 更新数据库中的尺寸
+            self._update_winsize_in_db()
     
     def write(self, data: str):
         """写入数据到终端"""
@@ -125,6 +131,8 @@ class TerminalSession:
                 session_db.is_active = True
                 session_db.pid = self.child_pid
                 session_db.cwd = self.cwd
+                session_db.rows = self.rows
+                session_db.cols = self.cols
             else:
                 session_db = TerminalSessionDB(
                     id=self.session_id,
@@ -134,13 +142,33 @@ class TerminalSession:
                     created_at=time.time(),
                     is_active=True,
                     pid=self.child_pid,
-                    cwd=self.cwd
+                    cwd=self.cwd,
+                    rows=self.rows,
+                    cols=self.cols
                 )
                 self.db.add(session_db)
             
             self.db.commit()
         except Exception as e:
             print(f"Error saving session to DB: {e}")
+            self.db.rollback()
+    
+    def _update_winsize_in_db(self):
+        """更新数据库中的终端尺寸"""
+        if not self.db:
+            return
+        
+        try:
+            session_db = self.db.query(TerminalSessionDB).filter(
+                TerminalSessionDB.id == self.session_id
+            ).first()
+            
+            if session_db:
+                session_db.rows = self.rows
+                session_db.cols = self.cols
+                self.db.commit()
+        except Exception as e:
+            print(f"Error updating winsize in DB: {e}")
             self.db.rollback()
     
     def _save_buffer_to_db(self):
@@ -303,7 +331,9 @@ class TerminalManager:
                     "username": session_db.username,
                     "last_activity": session_db.last_activity,
                     "created_at": session_db.created_at,
-                    "running": session_db.id in self.sessions and self.sessions[session_db.id].is_alive()
+                    "running": session_db.id in self.sessions and self.sessions[session_db.id].is_alive(),
+                    "rows": session_db.rows or 24,
+                    "cols": session_db.cols or 80
                 })
             
             db.commit()
