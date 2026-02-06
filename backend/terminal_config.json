@@ -3,5 +3,7 @@
   "shell": "/bin/zsh",
   "font_size": 14,
   "theme": "dark",
-  "refresh_interval": 5
+  "refresh_interval": 5,
+  "session_timeout": 3600,
+  "buffer_size": 1000
 }

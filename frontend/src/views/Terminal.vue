@@ -110,10 +110,10 @@ const createTerminal = (sessionId) => {
   return { term, fitAddon }
 }
 
-const connectWebSocket = (sessionId) => {
+const connectWebSocket = (sessionId, isReconnect = false) => {
   const config = configStore.config
   const cwd = config.default_path || '~'
-  const wsUrl = `ws://localhost:8000/api/v1/terminal/ws/${sessionId}?token=${authStore.token}&cwd=${encodeURIComponent(cwd)}`
+  const wsUrl = `ws://localhost:8000/api/v1/terminal/ws/${sessionId}?token=${authStore.token}&cwd=${encodeURIComponent(cwd)}&reconnect=${isReconnect}`
   const ws = new WebSocket(wsUrl)
   
   // 找到会话名称
@@ -121,12 +121,24 @@ const connectWebSocket = (sessionId) => {
   const sessionName = session ? session.name : '终端'
 
   ws.onopen = () => {
-    message.success(`${sessionName} 连接成功`)
+    if (isReconnect) {
+      message.success(`${sessionName} 重连成功`)
+    } else {
+      message.success(`${sessionName} 连接成功`)
+    }
   }
 
   ws.onmessage = (event) => {
     const data = JSON.parse(event.data)
-    if (data.type === 'output') {
+    
+    if (data.type === 'reconnect') {
+      // 重连成功，恢复缓存的输出
+      terminalStore.terminals[sessionId]?.term.write(data.data)
+      message.info(data.message)
+    } else if (data.type === 'reconnect_failed') {
+      // 重连失败，会话已失效
+      message.warning(`${sessionName} 会话已失效，已创建新会话`)
+    } else if (data.type === 'output') {
       terminalStore.terminals[sessionId]?.term.write(data.data)
     }
   }
@@ -198,7 +210,7 @@ const handleCreateSession = () => {
   validateMessage.value = ''
 }
 
-const addSession = async (name) => {
+const addSession = async (name, isReconnect = false) => {
   sessionCounter++
   const sessionId = `session-${Date.now()}-${sessionCounter}`
   const session = {
@@ -208,6 +220,7 @@ const addSession = async (name) => {
 
   terminalStore.sessions.push(session)
   terminalStore.activeSession = sessionId
+  terminalStore.saveSessions()
 
   await nextTick()
 
@@ -217,7 +230,7 @@ const addSession = async (name) => {
     term.open(container)
     fitAddon.fit()
 
-    const ws = connectWebSocket(sessionId)
+    const ws = connectWebSocket(sessionId, isReconnect)
 
     term.onData(data => {
       if (ws.readyState === WebSocket.OPEN) {
@@ -237,7 +250,9 @@ const addSession = async (name) => {
     resizeObserver.observe(container)
     
     // 显示创建成功消息
-    message.success(`终端 "${session.name}" 创建成功`)
+    if (!isReconnect) {
+      message.success(`终端 "${session.name}" 创建成功`)
+    }
   }
 }
 
@@ -265,6 +280,9 @@ const removeSession = (sessionId) => {
     terminalStore.activeSession = terminalStore.sessions[0].id
   }
   
+  // 保存会话状态
+  terminalStore.saveSessions()
+  
   // 显示关闭成功消息
   message.info(`终端 "${sessionName}" 已关闭`)
 }
@@ -289,18 +307,43 @@ watch(() => terminalStore.activeSession, async (newSessionId) => {
 onMounted(async () => {
   await configStore.loadConfig()
   
-  // 如果没有会话，创建默认终端
+  // 尝试恢复之前的会话
+  terminalStore.loadSessions()
+  
   if (terminalStore.sessions.length === 0) {
+    // 没有保存的会话，创建默认终端
     addSession('默认终端')
   } else {
-    // 恢复已有会话的终端显示
+    // 有保存的会话，尝试重连
+    message.info('正在恢复会话...')
+    
     await nextTick()
     for (const session of terminalStore.sessions) {
       const container = terminalStore.terminalRefs[session.id]
-      const terminal = terminalStore.terminals[session.id]
-      if (container && terminal) {
-        terminal.term.open(container)
-        terminal.fitAddon.fit()
+      if (container) {
+        const { term, fitAddon } = createTerminal(session.id)
+        term.open(container)
+        fitAddon.fit()
+
+        // 尝试重连到已存在的会话
+        const ws = connectWebSocket(session.id, true)
+
+        term.onData(data => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'input', data }))
+          }
+        })
+
+        term.onResize(({ cols, rows }) => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'resize', cols, rows }))
+          }
+        })
+
+        const resizeObserver = new ResizeObserver(() => {
+          fitAddon.fit()
+        })
+        resizeObserver.observe(container)
       }
     }
   }

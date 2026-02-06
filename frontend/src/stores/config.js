@@ -8,7 +8,9 @@ export const useConfigStore = defineStore('config', () => {
     shell: '/bin/bash',
     font_size: 14,
     theme: 'dark',
-    refresh_interval: 3
+    refresh_interval: 3,
+    session_timeout: 3600,  // 会话超时（秒）
+    buffer_size: 1000  // 缓存行数
   })
   
   async function loadConfig() {

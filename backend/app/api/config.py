@@ -14,6 +14,8 @@ class TerminalConfig(BaseModel):
     font_size: int = 14
     theme: str = "dark"
     refresh_interval: int = 3  # 仪表盘刷新间隔（秒）
+    session_timeout: int = 3600  # 会话超时时间（秒），默认1小时
+    buffer_size: int = 1000  # 输出缓存行数
 
 def load_config() -> TerminalConfig:
     """加载配置"""

@@ -10,7 +10,7 @@
         :wrapper-col="{ span: 18 }"
       >
         <a-form-item
-          label="Dashboard刷新间隔"
+          label="刷新间隔"
           name="refresh_interval"
           help="仪表盘数据自动刷新的时间间隔（秒）"
         >
@@ -76,6 +76,57 @@
             <a-radio value="light">浅色</a-radio>
           </a-radio-group>
         </a-form-item>
+        
+        <a-divider>会话管理</a-divider>
+        
+        <a-form-item
+          label="会话超时"
+          name="session_timeout"
+          help="终端会话在无活动后保持的时间，超时后会话会被自动清理"
+        >
+          <a-slider
+            v-model:value="formState.session_timeout"
+            :min="300"
+            :max="7200"
+            :step="300"
+            :marks="{ 
+              300: '5分钟', 
+              1800: '30分钟', 
+              3600: '1小时', 
+              7200: '2小时' 
+            }"
+          />
+          <div style="margin-top: 8px; color: rgba(0, 0, 0, 0.45); font-size: 12px;">
+            当前设置: {{ formatTimeout(formState.session_timeout) }}
+          </div>
+        </a-form-item>
+        
+        <a-form-item
+          label="缓存行数"
+          name="buffer_size"
+        >
+          <template #help>
+            <div>终端输出缓存的最大行数，用于重连时恢复输出</div>
+            <div style="color: #faad14; margin-top: 4px;">
+              💡 内存占用估算: {{ calculateMemoryUsage(formState.buffer_size) }}
+            </div>
+          </template>
+          <a-slider
+            v-model:value="formState.buffer_size"
+            :min="100"
+            :max="5000"
+            :step="100"
+            :marks="{ 
+              100: '100', 
+              1000: '1000', 
+              2500: '2500', 
+              5000: '5000' 
+            }"
+          />
+          <div style="margin-top: 8px; color: rgba(0, 0, 0, 0.45); font-size: 12px;">
+            当前设置: {{ formState.buffer_size }} 行
+          </div>
+        </a-form-item>
       </a-form>
     </a-card>
     
@@ -104,12 +155,14 @@
           <li><strong>Shell：</strong>选择要使用的 Shell 程序。确保所选 Shell 已安装在服务器上</li>
           <li><strong>字体大小：</strong>调整终端显示的字体大小，范围 10-24</li>
           <li><strong>主题：</strong>选择终端的颜色主题</li>
+          <li><strong>会话超时：</strong>设置终端会话在无活动后保持的时间，范围 5分钟-2小时。超时后会话会被自动清理。建议根据实际使用场景设置</li>
+          <li><strong>缓存行数：</strong>设置终端输出缓存的最大行数，范围 100-5000 行。重连时会恢复缓存的输出。每个会话独立占用内存，建议根据服务器资源合理设置</li>
         </ul>
       </a-typography-paragraph>
       
       <a-alert
         message="提示"
-        description="系统设置立即生效。终端设置需要创建新的终端会话才能生效，已有的终端会话将继续使用旧配置。"
+        description="系统设置立即生效。终端设置需要创建新的终端会话才能生效，已有的终端会话将继续使用旧配置。会话超时和缓存行数的更改会在下次创建会话时生效。"
         type="info"
         show-icon
       />
@@ -130,8 +183,37 @@ const formState = reactive({
   shell: '/bin/bash',
   font_size: 14,
   theme: 'dark',
-  refresh_interval: 3
+  refresh_interval: 3,
+  session_timeout: 3600,
+  buffer_size: 1000
 })
+
+const formatTimeout = (seconds) => {
+  if (seconds < 60) {
+    return `${seconds} 秒`
+  } else if (seconds < 3600) {
+    return `${Math.floor(seconds / 60)} 分钟`
+  } else {
+    const hours = Math.floor(seconds / 3600)
+    const minutes = Math.floor((seconds % 3600) / 60)
+    return minutes > 0 ? `${hours} 小时 ${minutes} 分钟` : `${hours} 小时`
+  }
+}
+
+const calculateMemoryUsage = (lines) => {
+  // 估算每行平均80个字符，每个字符约2字节（UTF-8）
+  // 加上额外的数据结构开销，每行约200字节
+  const bytesPerLine = 200
+  const totalBytes = lines * bytesPerLine
+  
+  if (totalBytes < 1024) {
+    return `约 ${totalBytes} B`
+  } else if (totalBytes < 1024 * 1024) {
+    return `约 ${(totalBytes / 1024).toFixed(1)} KB`
+  } else {
+    return `约 ${(totalBytes / 1024 / 1024).toFixed(2)} MB`
+  }
+}
 
 const loadConfig = async () => {
   await configStore.loadConfig()

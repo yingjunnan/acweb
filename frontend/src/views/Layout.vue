@@ -117,12 +117,8 @@ const handleLogout = () => {
     }
   })
   
-  // 清空终端状态
-  terminalStore.sessions = []
-  terminalStore.activeSession = ''
-  terminalStore.terminalRefs = {}
-  terminalStore.terminals = {}
-  terminalStore.websockets = {}
+  // 清空终端状态和持久化数据
+  terminalStore.clearSessions()
   
   authStore.logout()
   router.push('/login')
