@@ -74,7 +74,8 @@
             <a-button 
               size="small" 
               @click="toggleFullscreen"
-              :type="isFullscreen ? 'primary' : 'default'"
+              :type="isFullscreen ? 'default' : 'default'"
+              :class="{ 'fullscreen-active': isFullscreen }"
             >
               <template #icon>
                 <FullscreenExitOutlined v-if="isFullscreen" />
@@ -181,7 +182,7 @@
 
 <script setup>
 import { ref, onMounted, onUnmounted, nextTick, watch, defineOptions } from 'vue'
-import { message } from 'ant-design-vue'
+import { message, Modal } from 'ant-design-vue'
 import { 
   PlusOutlined, 
   ClockCircleOutlined, 
@@ -691,7 +692,21 @@ const removeSession = (sessionId) => {
 
 const onEdit = (targetKey, action) => {
   if (action === 'remove') {
-    removeSession(targetKey)
+    // 找到要删除的会话名称
+    const session = terminalStore.sessions.find(s => s.id === targetKey)
+    const sessionName = session ? session.name : '未知终端'
+    
+    // 弹出确认对话框
+    Modal.confirm({
+      title: '确认关闭终端',
+      content: `确定要关闭终端 "${sessionName}" 吗？关闭后会话将被终止，所有未保存的数据将丢失。`,
+      okText: '确认关闭',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk() {
+        removeSession(targetKey)
+      }
+    })
   }
 }
 
@@ -845,12 +860,12 @@ onMounted(async () => {
   
   // 从后端获取活跃会话列表（唯一的真实来源）
   try {
-    message.info('正在加载会话...')
     const response = await terminalApi.getSessions()
     const activeSessions = response.data.sessions || []
     
     if (activeSessions.length > 0) {
-      // 有活跃会话，恢复它们
+      // 有活跃会话，显示加载提示并恢复它们
+      message.info('正在加载会话...')
       console.log(`Found ${activeSessions.length} active sessions from server`)
       
       // 更新 store 中的会话列表
@@ -961,26 +976,23 @@ onMounted(async () => {
       if (successCount > 0) {
         message.success(`成功恢复 ${successCount} 个会话`)
       } else {
-        message.warning('会话恢复失败，已创建新会话')
+        message.warning('会话恢复失败，请手动创建新会话')
         terminalStore.clearSessions()
-        addSession('默认终端')
       }
     } else {
-      // 后端没有会话，创建默认终端
-      console.log('No active sessions found, creating default terminal')
+      // 后端没有会话，显示空状态
+      console.log('No active sessions found')
       terminalStore.clearSessions()
-      addSession('默认终端')
     }
     
     // 启动定期状态更新
     startStatusUpdater()
   } catch (error) {
     console.error('Failed to load sessions from server:', error)
-    message.error('加载会话失败，已创建新会话')
+    message.error('加载会话失败，请手动创建新会话')
     
-    // 从服务器加载失败，创建默认终端
+    // 从服务器加载失败，清空会话列表
     terminalStore.clearSessions()
-    addSession('默认终端')
   }
 })
 
@@ -1181,6 +1193,17 @@ onUnmounted(() => {
   font-size: 12px;
 }
 
+.fullscreen-active {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+  color: white !important;
+  border-color: transparent !important;
+}
+
+.fullscreen-active:hover {
+  background: linear-gradient(135deg, #5568d3 0%, #653a8b 100%) !important;
+  color: white !important;
+}
+
 .session-details {
   padding: 8px 0;
 }
@@ -1270,42 +1293,5 @@ onUnmounted(() => {
 .empty-button:hover {
   transform: translateY(-2px);
   box-shadow: 0 6px 16px rgba(102, 126, 234, 0.4);
-}
-
-@media (max-width: 768px) {
-  .page-title {
-    font-size: 20px;
-  }
-  
-  .terminal-header {
-    margin-bottom: 12px;
-    padding-bottom: 12px;
-  }
-  
-  .terminal-tabs {
-    padding: 12px;
-  }
-  
-  .terminal-container {
-    padding: 8px;
-  }
-  
-  .empty-state {
-    padding: 20px;
-  }
-  
-  .empty-title {
-    font-size: 20px;
-  }
-  
-  .empty-description {
-    font-size: 14px;
-  }
-  
-  .empty-button {
-    height: 40px;
-    font-size: 14px;
-    padding: 0 24px;
-  }
 }
 </style>

@@ -388,42 +388,4 @@ onUnmounted(() => {
 :deep(.ant-progress-text) {
   font-weight: 600;
 }
-
-@media (max-width: 768px) {
-  .dashboard-header {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 12px;
-  }
-  
-  .page-title {
-    font-size: 22px;
-  }
-  
-  .refresh-info {
-    width: 100%;
-    justify-content: space-between;
-  }
-  
-  .stat-value {
-    font-size: 28px;
-  }
-  
-  .network-icon {
-    font-size: 28px;
-  }
-  
-  .network-value {
-    font-size: 18px;
-  }
-  
-  .progress-card :deep(.ant-card-body) {
-    padding: 24px 16px;
-    min-height: 180px;
-  }
-  
-  .progress-wrapper {
-    padding: 8px;
-  }
-}
 </style>

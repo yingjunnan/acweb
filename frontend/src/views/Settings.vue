@@ -394,19 +394,4 @@ li {
   margin-bottom: 8px;
   line-height: 1.8;
 }
-
-@media (max-width: 768px) {
-  .page-title {
-    font-size: 22px;
-    margin-bottom: 16px;
-  }
-  
-  :deep(.ant-form-item-label) {
-    text-align: left;
-  }
-  
-  :deep(.ant-card-body) {
-    padding: 16px;
-  }
-}
 </style>
