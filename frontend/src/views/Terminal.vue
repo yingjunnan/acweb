@@ -19,6 +19,7 @@
         :key="session.id"
         :tab="session.name"
         :closable="terminalStore.sessions.length > 1"
+        :force-render="true"
       >
         <div :ref="el => setTerminalRef(session.id, el)" class="terminal-container"></div>
       </a-tab-pane>
@@ -68,6 +69,8 @@ import { useConfigStore } from '../stores/config'
 import { useTerminalStore } from '../stores/terminal'
 import { Terminal } from 'xterm'
 import { FitAddon } from 'xterm-addon-fit'
+import { WebLinksAddon } from 'xterm-addon-web-links'
+import { WebglAddon } from 'xterm-addon-webgl'
 import 'xterm/css/xterm.css'
 
 const authStore = useAuthStore()
@@ -90,35 +93,83 @@ const createTerminal = (sessionId) => {
   const config = configStore.config
   const term = new Terminal({
     cursorBlink: true,
+    cursorStyle: 'block',
     fontSize: config.font_size || 14,
     fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+    fontWeight: 'normal',
+    fontWeightBold: 'bold',
+    lineHeight: 1.2,
+    letterSpacing: 0,
     theme: config.theme === 'light' ? {
       background: '#ffffff',
-      foreground: '#000000'
+      foreground: '#000000',
+      cursor: '#000000',
+      cursorAccent: '#ffffff',
+      selection: 'rgba(0, 0, 0, 0.3)'
     } : {
       background: '#1e1e1e',
-      foreground: '#d4d4d4'
+      foreground: '#d4d4d4',
+      cursor: '#d4d4d4',
+      cursorAccent: '#1e1e1e',
+      selection: 'rgba(255, 255, 255, 0.3)',
+      black: '#000000',
+      red: '#cd3131',
+      green: '#0dbc79',
+      yellow: '#e5e510',
+      blue: '#2472c8',
+      magenta: '#bc3fbc',
+      cyan: '#11a8cd',
+      white: '#e5e5e5',
+      brightBlack: '#666666',
+      brightRed: '#f14c4c',
+      brightGreen: '#23d18b',
+      brightYellow: '#f5f543',
+      brightBlue: '#3b8eea',
+      brightMagenta: '#d670d6',
+      brightCyan: '#29b8db',
+      brightWhite: '#e5e5e5'
     },
     rows: 24,
-    cols: 80
+    cols: 80,
+    scrollback: 10000,
+    allowProposedApi: true,
+    allowTransparency: false,
+    convertEol: false,
+    disableStdin: false,
+    windowsMode: false,
+    macOptionIsMeta: true,
+    rightClickSelectsWord: true,
+    fastScrollModifier: 'shift',
+    fastScrollSensitivity: 5,
+    scrollSensitivity: 1
   })
 
   const fitAddon = new FitAddon()
+  const webLinksAddon = new WebLinksAddon()
+  
   term.loadAddon(fitAddon)
+  term.loadAddon(webLinksAddon)
+  
+  // 尝试加载 WebGL 渲染器以提高性能
+  try {
+    const webglAddon = new WebglAddon()
+    webglAddon.onContextLoss(() => {
+      webglAddon.dispose()
+    })
+    term.loadAddon(webglAddon)
+  } catch (e) {
+    console.warn('WebGL addon could not be loaded, falling back to canvas renderer', e)
+  }
 
   terminalStore.terminals[sessionId] = { term, fitAddon }
   return { term, fitAddon }
 }
 
-const connectWebSocket = (sessionId, isReconnect = false) => {
-  const config = configStore.config
-  const cwd = config.default_path || '~'
-  const wsUrl = `ws://localhost:8000/api/v1/terminal/ws/${sessionId}?token=${authStore.token}&cwd=${encodeURIComponent(cwd)}&reconnect=${isReconnect}`
+const connectWebSocket = (sessionId, sessionName, isReconnect = false) => {
+  const terminalConfig = configStore.config
+  const cwd = terminalConfig.default_path || '~'
+  const wsUrl = `ws://localhost:8000/api/v1/terminal/ws/${sessionId}?token=${authStore.token}&cwd=${encodeURIComponent(cwd)}&reconnect=${isReconnect}&name=${encodeURIComponent(sessionName)}`
   const ws = new WebSocket(wsUrl)
-  
-  // 找到会话名称
-  const session = terminalStore.sessions.find(s => s.id === sessionId)
-  const sessionName = session ? session.name : '终端'
 
   ws.onopen = () => {
     if (isReconnect) {
@@ -225,12 +276,21 @@ const addSession = async (name, isReconnect = false) => {
   await nextTick()
 
   const container = terminalStore.terminalRefs[sessionId]
-  if (container) {
+  if (container && !terminalStore.terminals[sessionId]) {
+    // 只有当终端不存在时才创建
     const { term, fitAddon } = createTerminal(sessionId)
     term.open(container)
-    fitAddon.fit()
+    
+    // 延迟调整大小，确保容器已经渲染
+    setTimeout(() => {
+      try {
+        fitAddon.fit()
+      } catch (e) {
+        console.warn('Failed to fit terminal:', e)
+      }
+    }, 100)
 
-    const ws = connectWebSocket(sessionId, isReconnect)
+    const ws = connectWebSocket(sessionId, session.name, isReconnect)
 
     term.onData(data => {
       if (ws.readyState === WebSocket.OPEN) {
@@ -245,7 +305,11 @@ const addSession = async (name, isReconnect = false) => {
     })
 
     const resizeObserver = new ResizeObserver(() => {
-      fitAddon.fit()
+      try {
+        fitAddon.fit()
+      } catch (e) {
+        console.warn('Failed to fit terminal on resize:', e)
+      }
     })
     resizeObserver.observe(container)
     
@@ -293,14 +357,21 @@ const onEdit = (targetKey, action) => {
   }
 }
 
-// 监听路由变化，重新渲染终端
+// 监听活动会话变化，调整终端尺寸
 watch(() => terminalStore.activeSession, async (newSessionId) => {
-  if (newSessionId) {
+  if (newSessionId && terminalStore.terminals[newSessionId]) {
     await nextTick()
-    const terminal = terminalStore.terminals[newSessionId]
-    if (terminal) {
-      terminal.fitAddon.fit()
-    }
+    // 延迟调整尺寸，确保标签页切换动画完成
+    setTimeout(() => {
+      try {
+        const terminal = terminalStore.terminals[newSessionId]
+        if (terminal && terminal.fitAddon) {
+          terminal.fitAddon.fit()
+        }
+      } catch (e) {
+        console.warn('Failed to fit terminal on tab switch:', e)
+      }
+    }, 150)
   }
 })
 
@@ -320,13 +391,21 @@ onMounted(async () => {
     await nextTick()
     for (const session of terminalStore.sessions) {
       const container = terminalStore.terminalRefs[session.id]
-      if (container) {
+      if (container && !terminalStore.terminals[session.id]) {
+        // 只有当终端不存在时才创建
         const { term, fitAddon } = createTerminal(session.id)
         term.open(container)
-        fitAddon.fit()
+        
+        setTimeout(() => {
+          try {
+            fitAddon.fit()
+          } catch (e) {
+            console.warn('Failed to fit terminal on mount:', e)
+          }
+        }, 100)
 
         // 尝试重连到已存在的会话
-        const ws = connectWebSocket(session.id, true)
+        const ws = connectWebSocket(session.id, session.name, true)
 
         term.onData(data => {
           if (ws.readyState === WebSocket.OPEN) {
@@ -341,7 +420,11 @@ onMounted(async () => {
         })
 
         const resizeObserver = new ResizeObserver(() => {
-          fitAddon.fit()
+          try {
+            fitAddon.fit()
+          } catch (e) {
+            console.warn('Failed to fit terminal on resize:', e)
+          }
         })
         resizeObserver.observe(container)
       }

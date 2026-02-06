@@ -2,6 +2,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .core.config import settings
 from .api import auth, terminal, system, config
+from .db.database import init_db
+
+# 初始化数据库
+init_db()
 
 app = FastAPI(
     title=settings.PROJECT_NAME,

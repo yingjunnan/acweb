@@ -8,13 +8,22 @@ import json
 router = APIRouter()
 
 @router.websocket("/ws/{session_id}")
-async def websocket_endpoint(websocket: WebSocket, session_id: str, token: str = Query(...), cwd: str = Query(None), reconnect: bool = Query(False)):
+async def websocket_endpoint(
+    websocket: WebSocket, 
+    session_id: str, 
+    token: str = Query(...), 
+    cwd: str = Query(None), 
+    reconnect: bool = Query(False),
+    name: str = Query("终端")
+):
     """WebSocket 终端连接"""
     # 验证 token
     payload = decode_access_token(token)
     if not payload:
         await websocket.close(code=1008)
         return
+    
+    username = payload.get("sub")
     
     await websocket.accept()
     
@@ -27,7 +36,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, token: str =
     
     # 如果是重连，尝试恢复会话
     if reconnect:
-        success, buffer = terminal_manager.reconnect_session(session_id)
+        success, buffer = terminal_manager.reconnect_session(session_id, username)
         if success:
             # 发送缓存的输出
             await websocket.send_json({
@@ -36,16 +45,19 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, token: str =
                 "message": "会话重连成功"
             })
             session = terminal_manager.get_session(session_id)
+            if not session:
+                # 会话不在内存中，需要重新创建
+                session = terminal_manager.create_session(session_id, username, name, cwd=cwd)
         else:
             # 重连失败，创建新会话
             await websocket.send_json({
                 "type": "reconnect_failed",
                 "message": buffer
             })
-            session = terminal_manager.create_session(session_id, cwd=cwd)
+            session = terminal_manager.create_session(session_id, username, name, cwd=cwd)
     else:
         # 创建新的终端会话
-        session = terminal_manager.create_session(session_id, cwd=cwd)
+        session = terminal_manager.create_session(session_id, username, name, cwd=cwd)
     
     try:
         # 创建读取任务
@@ -83,10 +95,15 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, token: str =
         await websocket.close()
 
 @router.get("/sessions")
-async def list_sessions():
+async def list_sessions(token: str = Query(...)):
     """列出所有活跃会话"""
+    payload = decode_access_token(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="未授权")
+    
+    username = payload.get("sub")
     return {
-        "sessions": terminal_manager.list_sessions()
+        "sessions": terminal_manager.list_sessions(username)
     }
 
 @router.post("/cleanup")
